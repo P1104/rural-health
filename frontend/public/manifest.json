@@ -1,0 +1,19 @@
+{
+  "name": "Rural Health Connect",
+  "short_name": "RuralHealth",
+  "description": "Emergency health assistance for rural India — works offline",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#030a16",
+  "theme_color": "#10d98a",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "categories": ["health", "medical"],
+  "lang": "en-IN",
+  "shortcuts": [
+    { "name": "Emergency SOS", "short_name": "SOS", "url": "/?sos=1", "description": "Send SOS immediately" }
+  ]
+}

@@ -1,0 +1,13 @@
+fastapi[standard]
+uvicorn
+pydantic
+cryptography
+h3<4
+python-dotenv
+motor
+pymongo
+websockets
+httpx
+twilio
+slowapi
+python-multipart
