@@ -87,13 +87,16 @@ DATABASE_URL = os.getenv(
 
 # Create engine with connection pooling optimized for Supabase
 engine = create_async_engine(
-    DATABASE_URL, 
-    echo=False, 
+    DATABASE_URL,
+    echo=False,
     pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,
     pool_timeout=30,
     pool_recycle=1800,  # Recycle connections every 30 min
+    connect_args={
+        "statement_cache_size": 0,  # Required for Supabase PgBouncer (transaction pool mode)
+    },
 )
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 Base = declarative_base()
