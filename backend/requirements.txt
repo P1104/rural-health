@@ -2,7 +2,7 @@ fastapi[standard]
 uvicorn
 pydantic
 cryptography
-h3<4
+h3-py
 python-dotenv
 sqlalchemy[asyncio]
 asyncpg
