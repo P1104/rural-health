@@ -4,7 +4,7 @@ import { useSearchParams } from 'next/navigation'
 import React, { useState, useEffect, useRef, Suspense } from 'react'
 import dynamic from 'next/dynamic'
 const OutbreakGlobe = dynamic(() => import('@/components/OutbreakGlobe'), { ssr: false })
-import { API_BASE_URL, WS_BASE_URL } from '@/config'
+import { API_BASE_URL, getWebSocketUrl } from '@/config'
 
 type SevType = 'critical' | 'urgent' | 'stable'
 
@@ -54,7 +54,9 @@ function HospitalContent() {
   const [currentNote, setCurrentNote] = useState('')
   const ws = useRef<WebSocket | null>(null)
   const locationWatchRef = useRef<number | null>(null)
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const [locationSharing, setLocationSharing] = useState(false)
+  const [connectionMode, setConnectionMode] = useState<'websocket' | 'polling'>('websocket')
   const [view, setView] = useState<'live' | 'history'>('live')
   const [history, setHistory] = useState<any[]>([])
 
@@ -95,64 +97,133 @@ function HospitalContent() {
     fetch(`${API_BASE_URL}/api/v3/reports/weekly`) // Reusing this for demo or a new endpoint
       .catch(() => { })
 
-    // Connect WebSocket to backend live feed
-    try {
-      const socket = new WebSocket(`${WS_BASE_URL}/ws/hospital`)
-      ws.current = socket
-      socket.onopen = () => setWsStatus('live')
-      socket.onclose = () => setWsStatus('offline')
-      socket.onerror = () => setWsStatus('offline')
-      socket.onmessage = (e) => {
-        try {
-          const data = JSON.parse(e.data)
-          if (data.event === 'new_case') {
-            const newCase: LiveCase = {
-              case_id: data.case_id,
-              h3_sector: data.h3_sector,
-              zones: data.zones || [],
-              symptoms: data.symptoms || [],
-              severity: data.severity || 'stable',
-              timestamp: data.timestamp || new Date().toISOString(),
-              distance: `${(Math.random() * 12 + 1).toFixed(1)} km`,
+    // Polling fallback when WebSocket fails
+    const startPolling = () => {
+      console.log('[Polling] Starting HTTP polling fallback...')
+      setConnectionMode('polling')
+      setWsStatus('live') // Show as connected since polling works
+
+      // Poll every 5 seconds
+      pollingIntervalRef.current = setInterval(() => {
+        fetch(`${API_BASE_URL}/api/v3/cases`)
+          .then(res => res.json())
+          .then(data => {
+            if (Array.isArray(data) && data.length > 0) {
+              setCases(prev => {
+                // Merge new cases, avoiding duplicates
+                const existingIds = new Set(prev.map(c => c.case_id))
+                const newCases = data.filter((c: LiveCase) => !existingIds.has(c.case_id))
+                if (newCases.length > 0) {
+                  newCases.forEach((c: LiveCase) => {
+                    setNewAlert(c.case_id)
+                    setTimeout(() => setNewAlert(null), 4000)
+                  })
+                }
+                return [...newCases, ...prev]
+              })
             }
-            setCases(prev => [newCase, ...prev])
-            setNewAlert(data.case_id)
-            setTimeout(() => setNewAlert(null), 4000)
-          } else if (data.event === 'sos_alert') {
-            const newCase: LiveCase = {
-              case_id: data.case_id,
-              h3_sector: `GPS: ${data.location.lat}, ${data.location.lng}`,
-              zones: ['URGENT SOS'],
-              symptoms: ['Panic Button Triggered'],
-              severity: 'critical',
-              timestamp: data.timestamp || new Date().toISOString(),
-              distance: 'URGENT',
-            }
-            setCases(prev => {
-              if (prev.find(c => c.case_id === data.case_id)) return prev
-              return [newCase, ...prev]
-            })
-            setNewAlert(data.case_id)
-            const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
-            const osc = ctx.createOscillator()
-            const gain = ctx.createGain()
-            osc.connect(gain); gain.connect(ctx.destination)
-            osc.type = 'sawtooth'
-            osc.frequency.setValueAtTime(500, ctx.currentTime)
-            osc.frequency.exponentialRampToValueAtTime(1000, ctx.currentTime + 0.5)
-            osc.frequency.exponentialRampToValueAtTime(500, ctx.currentTime + 1.0)
-            gain.gain.setValueAtTime(0.1, ctx.currentTime)
-            osc.start(); osc.stop(ctx.currentTime + 1.5)
-            setTimeout(() => setNewAlert(null), 10000)
-          } else if (data.event === 'case_accepted') {
-            setCases(prev => prev.filter(c => c.case_id !== data.case_id))
-          }
-        } catch { }
+          })
+          .catch(err => console.error('[Polling] Error:', err))
+      }, 5000)
+    }
+
+    const stopPolling = () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current)
+        pollingIntervalRef.current = null
       }
-    } catch { setWsStatus('offline') }
+    }
+
+    // Connect WebSocket to backend live feed with retry logic
+    const connectWebSocket = () => {
+      try {
+        const wsUrl = getWebSocketUrl('/ws/hospital')
+        console.log('[WebSocket] Connecting to:', wsUrl)
+
+        const socket = new WebSocket(wsUrl)
+        ws.current = socket
+
+        socket.onopen = () => {
+          console.log('[WebSocket] Connected successfully')
+          setWsStatus('live')
+        }
+
+        socket.onclose = (event) => {
+          console.log('[WebSocket] Closed:', event.code, event.reason)
+          setWsStatus('offline')
+          // If closed with error code, switch to polling fallback
+          if (event.code !== 1000 && event.code !== 1001) {
+            console.log('[WebSocket] Switching to polling fallback...')
+            setConnectionMode('polling')
+            startPolling()
+          }
+        }
+
+        socket.onerror = (error) => {
+          console.error('[WebSocket] Error:', error)
+          setWsStatus('offline')
+        }
+
+        socket.onmessage = (e) => {
+          try {
+            const data = JSON.parse(e.data)
+            if (data.event === 'new_case') {
+              const newCase: LiveCase = {
+                case_id: data.case_id,
+                h3_sector: data.h3_sector,
+                zones: data.zones || [],
+                symptoms: data.symptoms || [],
+                severity: data.severity || 'stable',
+                timestamp: data.timestamp || new Date().toISOString(),
+                distance: `${(Math.random() * 12 + 1).toFixed(1)} km`,
+              }
+              setCases(prev => [newCase, ...prev])
+              setNewAlert(data.case_id)
+              setTimeout(() => setNewAlert(null), 4000)
+            } else if (data.event === 'sos_alert') {
+              const newCase: LiveCase = {
+                case_id: data.case_id,
+                h3_sector: `GPS: ${data.location.lat}, ${data.location.lng}`,
+                zones: ['URGENT SOS'],
+                symptoms: ['Panic Button Triggered'],
+                severity: 'critical',
+                timestamp: data.timestamp || new Date().toISOString(),
+                distance: 'URGENT',
+              }
+              setCases(prev => {
+                if (prev.find(c => c.case_id === data.case_id)) return prev
+                return [newCase, ...prev]
+              })
+              setNewAlert(data.case_id)
+              const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+              const osc = ctx.createOscillator()
+              const gain = ctx.createGain()
+              osc.connect(gain); gain.connect(ctx.destination)
+              osc.type = 'sawtooth'
+              osc.frequency.setValueAtTime(500, ctx.currentTime)
+              osc.frequency.exponentialRampToValueAtTime(1000, ctx.currentTime + 0.5)
+              osc.frequency.exponentialRampToValueAtTime(500, ctx.currentTime + 1.0)
+              gain.gain.setValueAtTime(0.1, ctx.currentTime)
+              osc.start(); osc.stop(ctx.currentTime + 1.5)
+              setTimeout(() => setNewAlert(null), 10000)
+            } else if (data.event === 'case_accepted') {
+              setCases(prev => prev.filter(c => c.case_id !== data.case_id))
+            }
+          } catch (err) {
+            console.error('[WebSocket] Message parse error:', err)
+          }
+        }
+      } catch (err) {
+        console.error('[WebSocket] Connection failed:', err)
+        setWsStatus('offline')
+      }
+    }
+
+    connectWebSocket()
 
     return () => {
       ws.current?.close()
+      stopPolling()
       if (locationWatchRef.current !== null) navigator.geolocation.clearWatch(locationWatchRef.current)
     }
   }, [])
@@ -343,7 +414,9 @@ function HospitalContent() {
           </button>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{ width: 8, height: 8, borderRadius: '50%', background: wsStatus === 'live' ? '#10d98a' : wsStatus === 'connecting' ? '#f59e0b' : '#ef4444', animation: 'pulse 2s infinite' }} />
-            <span style={{ fontSize: 10, color: wsStatus === 'live' ? '#10d98a' : '#f59e0b', fontWeight: 700, fontFamily: 'monospace' }}>{wsStatus.toUpperCase()}</span>
+            <span style={{ fontSize: 10, color: wsStatus === 'live' ? '#10d98a' : '#f59e0b', fontWeight: 700, fontFamily: 'monospace' }}>
+              {wsStatus.toUpperCase()}{connectionMode === 'polling' && ' (POLL)'}
+            </span>
           </div>
           {/* Shift Toggle */}
           <button

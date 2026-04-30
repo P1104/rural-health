@@ -124,8 +124,22 @@ async def init_db():
         return False
 
 
-DB_AVAILABLE = True
-print("PostgreSQL configured")
+# In-memory fallback storage for when database is unreachable
+_in_memory_vault: dict = {}
+_in_memory_cases: dict = {}
+
+async def test_db_connection():
+    """Test if database connection works"""
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(select(Vault).limit(1))
+        return True
+    except Exception as e:
+        print(f"Database connection test failed: {e}")
+        return False
+
+DB_AVAILABLE = False  # Will be set to True if connection works
+print("PostgreSQL configured - testing connection...")
 
 
 app = FastAPI(title="Rural Health Secure API v3", version="3.0.0")
@@ -158,8 +172,31 @@ async def root():
 @app.get("/api/v3/db/init")
 async def setup_db():
     """Call this once to create tables in Supabase"""
+    global DB_AVAILABLE
     success = await init_db()
-    return {"status": "created" if success else "error"}
+    if success:
+        DB_AVAILABLE = True
+        # Test the connection
+        if await test_db_connection():
+            DB_AVAILABLE = True
+    return {"status": "created" if success else "error", "db_available": DB_AVAILABLE}
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup and test connection"""
+    global DB_AVAILABLE
+    try:
+        await init_db()
+        if await test_db_connection():
+            DB_AVAILABLE = True
+            print("✅ Database connection successful")
+        else:
+            DB_AVAILABLE = False
+            print("⚠️  Using in-memory storage (database unreachable)")
+    except Exception as e:
+        DB_AVAILABLE = False
+        print(f"⚠️  Using in-memory storage: {e}")
 
 
 # Create tables on first request
@@ -295,12 +332,13 @@ async def hospital_ws(ws: WebSocket):
 async def submit_case(payload: CaseSubmission):
     """
     SECURITY LAYERS:
-      1. Extract + encrypt PII → MongoDB vault (only key-holder can read)
+      1. Extract + encrypt PII → Vault (only key-holder can read)
       2. Anonymize location via H3 hex grid
       3. Strip PII → build public case record
-      4. Save public case to MongoDB
+      4. Save public case
       5. WebSocket broadcast to all hospital dashboards
     """
+    global DB_AVAILABLE, _in_memory_vault, _in_memory_cases
     case_id = generate_case_id()
     ts = datetime.now(timezone.utc).isoformat()
 
@@ -310,9 +348,12 @@ async def submit_case(payload: CaseSubmission):
         "encrypted_name": encrypt_pii(payload.registration.name),
         "encrypted_phone": encrypt_pii(payload.registration.phone),
         "encrypted_age": encrypt_pii(str(payload.registration.age)),
-        "exact_location": payload.location,  # kept separate from public feed
+        "exact_location": payload.location,
         "timestamp": ts,
-        "accessed_by": None,  # filled when doctor accepts
+        "accessed_by": None,
+        "accessed_at": None,
+        "field_notes": None,
+        "status": "open",
     }
 
     # Layer 3 — Anonymize location
@@ -334,7 +375,8 @@ async def submit_case(payload: CaseSubmission):
         "accepted_by": None,
     }
 
-    # Save to PostgreSQL (if available)
+    # Save to PostgreSQL (if available) or in-memory
+    saved_to_db = False
     if DB_AVAILABLE:
         try:
             async with async_session() as session:
@@ -362,10 +404,17 @@ async def submit_case(payload: CaseSubmission):
                 session.add(case_entry)
                 await session.commit()
                 print(f"✅ Case {case_id} successfully saved to PostgreSQL")
+                saved_to_db = True
         except Exception as e:
             print(f"❌ PostgreSQL INSERT ERROR for case {case_id}: {str(e)}")
-            # In production, you might want to raise this so the frontend knows it failed
-            # raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+            # Fall back to in-memory
+            DB_AVAILABLE = False
+    
+    # Fallback to in-memory storage
+    if not saved_to_db:
+        _in_memory_vault[case_id] = vault_doc
+        _in_memory_cases[case_id] = public_doc
+        print(f"💾 Case {case_id} saved to in-memory storage")
 
     # Layer 5 — Real-time broadcast to hospital dashboards via WebSocket
     broadcast_payload = {
@@ -379,7 +428,7 @@ async def submit_case(payload: CaseSubmission):
     }
     await manager.broadcast(broadcast_payload)
 
-    return {"status": "broadcasted", "case_id": case_id, "h3_sector": h3_sector}
+    return {"status": "broadcasted", "case_id": case_id, "h3_sector": h3_sector, "storage": "database" if saved_to_db else "memory"}
 
 
 @app.post("/api/v3/sos")
@@ -550,6 +599,7 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
 @app.get("/api/v3/cases")
 async def list_cases():
     """Returns all open anonymous cases for the hospital feed."""
+    global _in_memory_cases
     if DB_AVAILABLE:
         try:
             async with async_session() as session:
@@ -564,19 +614,36 @@ async def list_cases():
                         "zones": c.zones,
                         "symptoms": c.symptoms,
                         "severity": c.severity,
-                        "timestamp": (
-                            c.timestamp.isoformat()
-                            if c.timestamp
-                            else datetime.now(timezone.utc).isoformat()
+                        "duration": c.duration,
+                        "timestamp": c.timestamp.isoformat() if c.timestamp else None,
+                        "eta_minutes": random.choice(
+                            [8, 10, 12, 15, 18, 20, 25]
                         ),
                         "status": c.status,
                     }
                     for c in cases
                 ]
         except Exception as e:
-            print(f"Error fetching cases: {e}")
-
-    return []
+            print(f"Error fetching cases from DB: {e}")
+            DB_AVAILABLE = False
+    
+    # Fallback to in-memory
+    import random
+    return [
+        {
+            "case_id": case_id,
+            "h3_sector": c["h3_sector"],
+            "zones": c["zones"],
+            "symptoms": c["symptoms"],
+            "severity": c["severity"],
+            "duration": c["duration"],
+            "timestamp": c["timestamp"],
+            "eta_minutes": random.choice([8, 10, 12, 15, 18, 20, 25]),
+            "status": c["status"],
+        }
+        for case_id, c in _in_memory_cases.items()
+        if c["status"] == "open"
+    ]
 
 
 LANG_NAMES = {
