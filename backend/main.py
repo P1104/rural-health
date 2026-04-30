@@ -102,13 +102,8 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-try:
-    asyncio.run(init_db())
-    DB_AVAILABLE = True
-    print("PostgreSQL connected successfully")
-except Exception as e:
-    print(f"PostgreSQL connection failed: {e}")
-    DB_AVAILABLE = False
+DB_AVAILABLE = True
+print("PostgreSQL configured (will connect on first request)")
 
 app = FastAPI(title="Rural Health Secure API v3", version="3.0.0")
 
