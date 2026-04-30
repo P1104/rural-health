@@ -5,7 +5,7 @@ class AnonymizerService:
     @staticmethod
     def anonymize_location(lat: float, lng: float, resolution: int = 7) -> str:
         """Converts exact GPS to an H3 hexagonal sector."""
-        return h3.geo_to_h3(lat, lng, resolution)
+        return h3.latlng_to_cell(lat, lng, resolution)
 
     @staticmethod
     def generate_case_token() -> str:
