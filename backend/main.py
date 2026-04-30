@@ -64,14 +64,27 @@ async def call_local_llm(prompt: str) -> dict | None:
 # ── PostgreSQL/Supabase Database ────────────────────────────────────────────
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy import Column, String, Integer, Float, JSON, DateTime, Boolean, Text, select
+from sqlalchemy import (
+    Column,
+    String,
+    Integer,
+    Float,
+    JSON,
+    DateTime,
+    Boolean,
+    Text,
+    select,
+)
 from sqlalchemy.sql import func
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/rural_health")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/rural_health"
+)
 
 engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 Base = declarative_base()
+
 
 class Vault(Base):
     __tablename__ = "vault"
@@ -86,6 +99,7 @@ class Vault(Base):
     field_notes = Column(Text, nullable=True)
     status = Column(String, default="open")
 
+
 class Cases(Base):
     __tablename__ = "cases"
     case_id = Column(String, primary_key=True)
@@ -98,12 +112,44 @@ class Cases(Base):
     status = Column(String, default="open")
     accepted_by = Column(String, nullable=True)
 
+
 async def init_db():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        print("Database tables created successfully")
+        return True
+    except Exception as e:
+        print(f"Table creation error: {e}")
+        return False
+
 
 DB_AVAILABLE = True
-print("PostgreSQL configured (will connect on first request)")
+print("PostgreSQL configured")
+
+
+@app.get("/api/v3/db/init")
+async def setup_db():
+    """Call this once to create tables in Supabase"""
+    success = await init_db()
+    return {"status": "created" if success else "error"}
+
+
+# Create tables on first request
+@app.middleware("http")
+async def ensure_tables(request, call_next):
+    if hasattr(ensure_tables, "_initialized"):
+        return await call_next(request)
+
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        ensure_tables._initialized = True
+    except Exception as e:
+        print(f"Middleware table creation: {e}")
+
+    return await call_next(request)
+
 
 app = FastAPI(title="Rural Health Secure API v3", version="3.0.0")
 
@@ -284,7 +330,7 @@ async def submit_case(payload: CaseSubmission):
                     exact_location=payload.location,
                     timestamp=datetime.utcnow(),
                     accessed_by=None,
-                    status="open"
+                    status="open",
                 )
                 case_entry = Cases(
                     case_id=case_id,
@@ -294,7 +340,7 @@ async def submit_case(payload: CaseSubmission):
                     severity=payload.severity,
                     duration=payload.duration,
                     timestamp=datetime.utcnow(),
-                    status="open"
+                    status="open",
                 )
                 session.add(vault_entry)
                 session.add(case_entry)
@@ -351,7 +397,7 @@ async def trigger_sos(payload: dict = Body(...)):
                 severity="critical",
                 duration="unknown",
                 timestamp=datetime.utcnow(),
-                status="open"
+                status="open",
             )
             session.add(case_entry)
             await session.commit()
@@ -383,17 +429,21 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
         try:
             async with async_session() as session:
                 # Get vault entry
-                result = await session.execute(select(Vault).where(Vault.case_id == case_id))
+                result = await session.execute(
+                    select(Vault).where(Vault.case_id == case_id)
+                )
                 vault_entry = result.scalar_one_or_none()
-                
+
                 if vault_entry:
                     # Update case status
-                    result2 = await session.execute(select(Cases).where(Cases.case_id == case_id))
+                    result2 = await session.execute(
+                        select(Cases).where(Cases.case_id == case_id)
+                    )
                     case_entry = result2.scalar_one_or_none()
                     if case_entry:
                         case_entry.status = "accepted"
                         case_entry.accepted_by = doctor.doctor_id
-                    
+
                     # Update vault accessed info
                     vault_entry.accessed_by = doctor.doctor_id
                     vault_entry.accessed_at = datetime.utcnow()
@@ -408,7 +458,9 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
         if DB_AVAILABLE:
             try:
                 async with async_session() as session:
-                    result = await session.execute(select(Cases).where(Cases.case_id == case_id))
+                    result = await session.execute(
+                        select(Cases).where(Cases.case_id == case_id)
+                    )
                     case_entry = result.scalar_one_or_none()
                     if case_entry:
                         return {
@@ -464,7 +516,7 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
             "patient": {"name": name, "age": age, "phone": phone},
             "location": vault_entry.exact_location,
         }
-    
+
     # Fallback
     return {
         "status": "unlocked",
@@ -479,7 +531,9 @@ async def list_cases():
     if DB_AVAILABLE:
         try:
             async with async_session() as session:
-                result = await session.execute(select(Cases).where(Cases.status == "open"))
+                result = await session.execute(
+                    select(Cases).where(Cases.status == "open")
+                )
                 cases = result.scalars().all()
                 return [
                     {
@@ -488,14 +542,18 @@ async def list_cases():
                         "zones": c.zones,
                         "symptoms": c.symptoms,
                         "severity": c.severity,
-                        "timestamp": c.timestamp.isoformat() if c.timestamp else datetime.utcnow().isoformat(),
+                        "timestamp": (
+                            c.timestamp.isoformat()
+                            if c.timestamp
+                            else datetime.utcnow().isoformat()
+                        ),
                         "status": c.status,
                     }
                     for c in cases
                 ]
         except Exception as e:
             print(f"Error fetching cases: {e}")
-    
+
     return []
 
 
@@ -664,7 +722,9 @@ async def update_case_notes(case_id: str, payload: dict = Body(...)):
     if DB_AVAILABLE:
         try:
             async with async_session() as session:
-                result = await session.execute(select(Vault).where(Vault.case_id == case_id))
+                result = await session.execute(
+                    select(Vault).where(Vault.case_id == case_id)
+                )
                 vault_entry = result.scalar_one_or_none()
                 if vault_entry:
                     vault_entry.field_notes = notes
@@ -693,7 +753,9 @@ Respond ONLY with a JSON object: {{"discharge_summary": "...", "follow_up": "...
     if DB_AVAILABLE:
         try:
             async with async_session() as session:
-                result = await session.execute(select(Vault).where(Vault.case_id == case_id))
+                result = await session.execute(
+                    select(Vault).where(Vault.case_id == case_id)
+                )
                 vault_entry = result.scalar_one_or_none()
                 if vault_entry:
                     vault_entry.status = "discharged"
@@ -714,11 +776,12 @@ async def get_weekly_report():
         try:
             async with async_session() as session:
                 from sqlalchemy import func
+
                 result = await session.execute(select(func.count(Cases.case_id)))
                 count = result.scalar() or 0
         except Exception as e:
             print(f"Error getting count: {e}")
-    
+
     return {
         "total_cases": count,
         "critical_percent": 15,
