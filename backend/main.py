@@ -750,9 +750,18 @@ async def update_doctor_location(payload: DoctorLocationUpdate):
 
 
 @app.get("/health")
-def health():
+async def health():
+    db_ok = False
+    if DB_AVAILABLE:
+        try:
+            async with async_session() as session:
+                await session.execute(select(1))
+            db_ok = True
+        except Exception as e:
+            print(f"DB check error: {e}")
+    
     return {
         "status": "ok",
-        "postgres": DB_AVAILABLE,
+        "postgres": db_ok,
         "ws_connections": len(manager.active),
     }
