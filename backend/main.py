@@ -202,15 +202,25 @@ async def startup_event():
 # Create tables on first request
 @app.middleware("http")
 async def ensure_tables(request, call_next):
+    # Skip if already initialized or if we know DB is unavailable
     if hasattr(ensure_tables, "_initialized"):
+        return await call_next(request)
+    
+    # Mark as initialized immediately to prevent retries on concurrent requests
+    ensure_tables._initialized = True
+
+    # Only try DB if we're not sure it's unavailable
+    global DB_AVAILABLE
+    if not DB_AVAILABLE:
+        # Skip table creation, use in-memory mode
         return await call_next(request)
 
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-        ensure_tables._initialized = True
     except Exception as e:
-        print(f"Middleware table creation: {e}")
+        # Silently fail - startup event will handle logging
+        DB_AVAILABLE = False
 
     return await call_next(request)
 
@@ -599,7 +609,7 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
 @app.get("/api/v3/cases")
 async def list_cases():
     """Returns all open anonymous cases for the hospital feed."""
-    global _in_memory_cases
+    global _in_memory_cases, DB_AVAILABLE
     if DB_AVAILABLE:
         try:
             async with async_session() as session:
@@ -626,6 +636,11 @@ async def list_cases():
         except Exception as e:
             print(f"Error fetching cases from DB: {e}")
             DB_AVAILABLE = False
+            
+    # If we get here, DB failed or is unavailable - ensure in_memory_cases is defined
+    if not hasattr(list_cases, "_in_memory_cases_initialized"):
+        if not _in_memory_cases:
+            _in_memory_cases = {}
     
     # Fallback to in-memory
     import random
