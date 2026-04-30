@@ -4,10 +4,12 @@ pydantic
 cryptography
 h3<4
 python-dotenv
-motor
-pymongo
+sqlalchemy[asyncio]
+asyncpg
 websockets
 httpx
 twilio
 slowapi
 python-multipart
+python-jose[cryptography]
+passlib[bcrypt]

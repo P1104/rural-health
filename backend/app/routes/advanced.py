@@ -118,30 +118,33 @@ async def detect_outbreaks():
     Cluster cases by H3 sector over last 24h.
     If 5+ cases share the same H3 + symptom type → outbreak alert.
     """
-    # Import the DB reference from main
     try:
         import sys, asyncio
         if 'main' in sys.modules:
-            from main import cases_col, MONGO_AVAILABLE
+            from main import Cases, DB_AVAILABLE, async_session
         else:
-            from backend.main import cases_col, MONGO_AVAILABLE
-        if not MONGO_AVAILABLE or cases_col is None:
+            from backend.main import Cases, DB_AVAILABLE, async_session
+        
+        if not DB_AVAILABLE:
             return _demo_outbreak()
 
-        cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
-        cursor = cases_col.find({"timestamp": {"$gte": cutoff}}, {"_id": 0})
-        cases = await asyncio.wait_for(cursor.to_list(500), timeout=5.0)
+        cutoff = datetime.utcnow() - timedelta(hours=24)
+        
+        async with async_session() as session:
+            from sqlalchemy import select
+            result = await session.execute(
+                select(Cases).where(Cases.timestamp >= cutoff)
+            )
+            cases = result.scalars().all()
 
         # Count by H3 sector + top symptom
         from collections import Counter
         sector_counts: Counter = Counter()
-        sector_symptoms: dict = {}
         for c in cases:
-            sector = c.get("h3_sector", "unknown")
-            symptoms = c.get("symptoms", [])
+            sector = c.h3_sector or "unknown"
+            symptoms = c.symptoms or []
             key = f"{sector}|{symptoms[0] if symptoms else 'general'}"
             sector_counts[key] += 1
-            sector_symptoms[key] = symptoms
 
         alerts = []
         for key, count in sector_counts.items():
