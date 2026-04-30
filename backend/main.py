@@ -128,6 +128,27 @@ DB_AVAILABLE = True
 print("PostgreSQL configured")
 
 
+app = FastAPI(title="Rural Health Secure API v3", version="3.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+async def root():
+    return {
+        "message": "Rural Health Connect API v3 is running",
+        "endpoints": {
+            "cases": "/api/v3/cases",
+            "health": "/health",
+            "docs": "/docs"
+        }
+    }
+
 @app.get("/api/v3/db/init")
 async def setup_db():
     """Call this once to create tables in Supabase"""
@@ -149,17 +170,6 @@ async def ensure_tables(request, call_next):
         print(f"Middleware table creation: {e}")
 
     return await call_next(request)
-
-
-app = FastAPI(title="Rural Health Secure API v3", version="3.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Mount doctor auth routes
 try:
