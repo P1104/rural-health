@@ -724,16 +724,8 @@ async def get_weekly_report():
         "total_cases": count,
         "critical_percent": 15,
         "average_eta": "12.4 min",
-            "top_symptoms": ["Fever", "Snakebite", "Respiratory Distress"],
-        }
-    except Exception as e:
-        print(f"Weekly report error: {e}")
-        return {
-            "total_cases": 0,
-            "critical_percent": 0,
-            "average_eta": "0 min",
-            "top_symptoms": [],
-        }
+        "top_symptoms": ["Fever", "Snakebite", "Respiratory Distress"],
+    }
 
 
 @app.post("/api/v3/doctor/location")
