@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
-import h3, uuid, base64, os, asyncio
+import uuid, base64, os, asyncio, hashlib, math
 from dotenv import load_dotenv
 
 load_dotenv()  # Load .env file — SARVAM_API_KEY, GEMINI_API_KEY, MONGO_URI
@@ -179,7 +179,11 @@ def encrypt_pii(data: str) -> str:
 
 
 def anonymize_location(lat: float, lng: float) -> str:
-    return h3.geo_to_h3(lat, lng, 7)
+    # Simple grid-based anonymization (like H3 but without the h3 library)
+    grid_size = 0.01  # ~1.1km grid
+    grid_lat = round(lat / grid_size) * grid_size
+    grid_lng = round(lng / grid_size) * grid_size
+    return f"H3:{grid_lat:.4f},{grid_lng:.4f}"
 
 
 def generate_case_id() -> str:
