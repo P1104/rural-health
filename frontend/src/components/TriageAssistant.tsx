@@ -112,7 +112,7 @@ export default function TriageAssistant({ result, loading, lang = 'kn' }: Triage
             </div>
           )}
 
-          <p style={{ fontSize: 14, color: '#cbd5e1', lineHeight: 1.65, marginBottom: 14, fontStyle: 'italic' }}>"{result.advice}"</p>
+          <p style={{ fontSize: 14, color: '#cbd5e1', lineHeight: 1.65, marginBottom: 14, fontStyle: 'italic' }}>&ldquo;{result.advice}&rdquo;</p>
 
           {/* Possible conditions */}
           {result.possible_conditions && result.possible_conditions.length > 0 && (

@@ -335,7 +335,7 @@ export default function AIGreeter({ lang, onDismiss, onVoiceReply }: AIGreeterPr
               </button>
               {replyTranscript && (
                 <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 6, fontStyle: 'italic' }}>
-                  "{replyTranscript}"
+                  &ldquo;{replyTranscript}&rdquo;
                 </p>
               )}
             </div>

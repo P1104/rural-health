@@ -1,5 +1,6 @@
 'use client'
 import React from 'react'
+import Link from 'next/link'
 import { API_BASE_URL } from '@/config'
 
 type AuthMode = 'login' | 'register'
@@ -166,8 +167,8 @@ export default function DoctorAuthPage() {
         </div>
 
         <p style={{ textAlign: 'center', marginTop: 24, fontSize: 12, color: '#1e293b', display: 'flex', justifyContent: 'center', gap: 20 }}>
-          <a href="/" style={{ color: '#475569', textDecoration: 'none' }}>← Back to Patient App</a>
-          <a href="/admin" style={{ color: '#475569', textDecoration: 'none', opacity: 0.6 }}>⚙️ Admin Portal</a>
+          <Link href="/" style={{ color: '#475569', textDecoration: 'none' }}>← Back to Patient App</Link>
+          <Link href="/admin" style={{ color: '#475569', textDecoration: 'none', opacity: 0.6 }}>⚙️ Admin Portal</Link>
         </p>
       </div>
     </div>

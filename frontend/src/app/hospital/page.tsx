@@ -594,7 +594,7 @@ function HospitalContent() {
                   {fieldNotes[activeCase.case_id] && !showNotesInput && (
                     <div style={{ marginTop: 12, padding: 12, background: 'rgba(16,217,138,0.03)', border: '1px dashed rgba(16,217,138,0.2)', borderRadius: 12 }}>
                       <p style={{ fontSize: 9, color: '#10d98a', textTransform: 'uppercase', fontWeight: 800, marginBottom: 4 }}>Saved Field Note</p>
-                      <p style={{ fontSize: 12, color: '#f1f5f9', fontStyle: 'italic' }}>"{fieldNotes[activeCase.case_id]}"</p>
+                      <p style={{ fontSize: 12, color: '#f1f5f9', fontStyle: 'italic' }}>&ldquo;{fieldNotes[activeCase.case_id]}&rdquo;</p>
                     </div>
                   )}
                   <button onClick={() => window.print()} style={{ width: '100%', padding: '12px', borderRadius: 14, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)', color: '#64748b', fontSize: 13, fontWeight: 700, cursor: 'pointer', marginTop: 8 }}>

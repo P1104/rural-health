@@ -158,7 +158,7 @@ export default function VoiceAssistant({ lang = 'kn', onSpeechAnalyzed }: VoiceA
 
       {transcript && (
         <div style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic', textAlign: 'center', maxWidth: 160, lineHeight: 1.4, background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: '6px 10px' }}>
-          "{transcript.slice(0, 60)}{transcript.length > 60 ? '…' : ''}"
+          &ldquo;{transcript.slice(0, 60)}{transcript.length > 60 ? '…' : ''}&rdquo;
         </div>
       )}
 
