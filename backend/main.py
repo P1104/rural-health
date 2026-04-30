@@ -7,7 +7,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
-import uuid, base64, os, asyncio, hashlib, math
+import uuid, base64, os, asyncio, hashlib, math, random
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
@@ -77,11 +77,24 @@ from sqlalchemy import (
 )
 from sqlalchemy.sql import func
 
+# Force IPv4 for Supabase connections (Render IPv6 issues)
+import socket
+socket.setdefaulttimeout(30)
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/rural_health"
 )
 
-engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+# Create engine with connection pooling optimized for Supabase
+engine = create_async_engine(
+    DATABASE_URL, 
+    echo=False, 
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,
+    pool_recycle=1800,  # Recycle connections every 30 min
+)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 Base = declarative_base()
 
@@ -396,7 +409,7 @@ async def submit_case(payload: CaseSubmission):
                     encrypted_phone=encrypt_pii(payload.registration.phone),
                     encrypted_age=encrypt_pii(str(payload.registration.age)),
                     exact_location=payload.location,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.utcnow(),  # naive UTC — matches TIMESTAMP WITHOUT TIME ZONE
                     accessed_by=None,
                     status="open",
                 )
@@ -407,7 +420,7 @@ async def submit_case(payload: CaseSubmission):
                     symptoms=payload.symptoms,
                     severity=payload.severity,
                     duration=payload.duration,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.utcnow(),  # naive UTC — matches TIMESTAMP WITHOUT TIME ZONE
                     status="open",
                 )
                 session.add(vault_entry)
@@ -474,7 +487,7 @@ async def trigger_sos(payload: dict = Body(...)):
                     symptoms=["SOS Triggered"],
                     severity="critical",
                     duration="unknown",
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.utcnow(),  # naive UTC — matches TIMESTAMP WITHOUT TIME ZONE
                     status="open",
                 )
                 session.add(case_entry)
@@ -527,15 +540,52 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
 
                     # Update vault accessed info
                     vault_entry.accessed_by = doctor.doctor_id
-                    vault_entry.accessed_at = datetime.now(timezone.utc)
+                    vault_entry.accessed_at = datetime.utcnow()  # naive UTC — matches TIMESTAMP WITHOUT TIME ZONE
                     await session.commit()
         except Exception as e:
             print(f"PostgreSQL error in accept_case: {e}")
             vault_entry = None
 
-    # If vault not found in PostgreSQL
+    # If vault not found in PostgreSQL, check in-memory storage
     if not vault_entry:
-        # Check if it's an SOS case from cases table
+        global _in_memory_vault, _in_memory_cases
+        
+        # Check in-memory vault first
+        if case_id in _in_memory_vault:
+            vault_doc = _in_memory_vault[case_id]
+            # Decrypt and return
+            name = base64.b64decode(vault_doc["encrypted_name"]).decode()
+            phone = base64.b64decode(vault_doc["encrypted_phone"]).decode()
+            age = base64.b64decode(vault_doc["encrypted_age"]).decode()
+            
+            # Update case status in memory
+            if case_id in _in_memory_cases:
+                _in_memory_cases[case_id]["status"] = "accepted"
+            
+            # Broadcast to other hospitals to remove from feed
+            try:
+                await manager.broadcast({
+                    "event": "case_accepted",
+                    "case_id": case_id,
+                    "accepted_by": doctor.hospital,
+                    "doctor_profile": {
+                        "name": doctor.doctor_name,
+                        "designation": doctor.designation or "MBBS, General Physician",
+                        "hospital": doctor.hospital,
+                        "cases_handled": doctor.cases_handled or 0,
+                        "eta_minutes": 15,
+                    },
+                })
+            except Exception:
+                pass
+            
+            return {
+                "status": "unlocked",
+                "patient": {"name": name, "age": age, "phone": phone},
+                "location": vault_doc["exact_location"],
+            }
+        
+        # Check if it's an SOS case from cases table (DB only)
         if DB_AVAILABLE:
             try:
                 async with async_session() as session:
@@ -556,7 +606,7 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
             except Exception:
                 pass
 
-        # Return demo data for testing
+        # Return demo data only if no vault entry found anywhere
         return {
             "status": "unlocked",
             "patient": {
@@ -643,7 +693,6 @@ async def list_cases():
             _in_memory_cases = {}
     
     # Fallback to in-memory
-    import random
     return [
         {
             "case_id": case_id,
