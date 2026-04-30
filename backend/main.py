@@ -67,7 +67,15 @@ try:
     import asyncio
 
     MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-    client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    # Add SSL settings for MongoDB Atlas
+    client = AsyncIOMotorClient(
+        MONGO_URI,
+        serverSelectionTimeoutMS=10000,
+        connectTimeoutMS=10000,
+        socketTimeoutMS=10000,
+        tls=True,
+        tlsAllowInvalidCertificates=True
+    )
     db = client["rural_health"]
     vault_col = db["vault"]  # Encrypted PII (only key-holders can decrypt)
     cases_col = db["public_cases"]  # Anonymized medical data
@@ -244,10 +252,15 @@ async def submit_case(payload: CaseSubmission):
     # Save to MongoDB (if available)
     if MONGO_AVAILABLE and vault_col is not None and cases_col is not None:
         try:
-            await asyncio.wait_for(vault_col.insert_one(vault_doc), timeout=5.0)
-            await asyncio.wait_for(cases_col.insert_one(public_doc), timeout=5.0)
+            result1 = await asyncio.wait_for(vault_col.insert_one(vault_doc), timeout=10.0)
+            result2 = await asyncio.wait_for(cases_col.insert_one(public_doc), timeout=10.0)
+            print(f"Case {case_id} saved to MongoDB - vault: {result1.inserted_id}, cases: {result2.inserted_id}")
+        except asyncio.TimeoutError:
+            print(f"MongoDB insert timeout for case {case_id}")
         except Exception as e:
+            import traceback
             print(f"MongoDB insert error: {e}")
+            print(traceback.format_exc())
 
     # Layer 5 — Real-time broadcast to hospital dashboards via WebSocket
     broadcast_payload = {
