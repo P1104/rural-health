@@ -402,17 +402,13 @@ async def list_cases():
     try:
         if MONGO_AVAILABLE and cases_col is not None:
             docs = await asyncio.wait_for(cases_col.find({"status": "open"}, {"_id": 0}).to_list(50), timeout=5.0)
-            if docs:
-                return docs
+            return docs
+    except asyncio.TimeoutError:
+        print("MongoDB query timed out")
     except Exception as e:
         print(f"Error fetching cases: {e}")
     
-    # Return demo cases so frontend works
-    return [
-        {"case_id": "SEC-DEMO1", "h3_sector": "H3:876182abc", "zones": ["Head", "Face"], "symptoms": ["fever", "headache"], "severity": "urgent", "timestamp": datetime.utcnow().isoformat(), "status": "open"},
-        {"case_id": "SEC-DEMO2", "h3_sector": "H3:876182def", "zones": ["Legs"], "symptoms": ["snakebite"], "severity": "critical", "timestamp": datetime.utcnow().isoformat(), "status": "open"},
-        {"case_id": "SEC-DEMO3", "h3_sector": "H3:876182ghi", "zones": ["Stomach"], "symptoms": ["cramps", "vomit"], "severity": "stable", "timestamp": datetime.utcnow().isoformat(), "status": "open"},
-    ]
+    return []
 
 
 LANG_NAMES = {
