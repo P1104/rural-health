@@ -7,8 +7,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime
 import uuid, base64, os, asyncio, hashlib, math
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 load_dotenv()  # Load .env file — SARVAM_API_KEY, GEMINI_API_KEY, MONGO_URI
@@ -302,7 +302,7 @@ async def submit_case(payload: CaseSubmission):
       5. WebSocket broadcast to all hospital dashboards
     """
     case_id = generate_case_id()
-    ts = datetime.utcnow().isoformat()
+    ts = datetime.now(timezone.utc).isoformat()
 
     # Layer 1 & 2 — Vault (encrypted PII)
     vault_doc = {
@@ -344,7 +344,7 @@ async def submit_case(payload: CaseSubmission):
                     encrypted_phone=encrypt_pii(payload.registration.phone),
                     encrypted_age=encrypt_pii(str(payload.registration.age)),
                     exact_location=payload.location,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                     accessed_by=None,
                     status="open",
                 )
@@ -355,15 +355,17 @@ async def submit_case(payload: CaseSubmission):
                     symptoms=payload.symptoms,
                     severity=payload.severity,
                     duration=payload.duration,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                     status="open",
                 )
                 session.add(vault_entry)
                 session.add(case_entry)
                 await session.commit()
-                print(f"Case {case_id} saved to PostgreSQL")
+                print(f"✅ Case {case_id} successfully saved to PostgreSQL")
         except Exception as e:
-            print(f"PostgreSQL insert error: {e}")
+            print(f"❌ PostgreSQL INSERT ERROR for case {case_id}: {str(e)}")
+            # In production, you might want to raise this so the frontend knows it failed
+            # raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
     # Layer 5 — Real-time broadcast to hospital dashboards via WebSocket
     broadcast_payload = {
@@ -386,7 +388,7 @@ async def trigger_sos(payload: dict = Body(...)):
     EMERGENCY PANIC BUTTON:
     Broadcasts a high-priority SOS alert to all hospitals immediately.
     """
-    ts = datetime.utcnow().isoformat()
+    ts = datetime.now(timezone.utc).isoformat()
     case_id = payload.get("case_id", "SOS-URGENT")
     location = payload.get("location", {"lat": 0.0, "lng": 0.0})
 
@@ -404,19 +406,23 @@ async def trigger_sos(payload: dict = Body(...)):
     }
 
     if DB_AVAILABLE:
-        async with async_session() as session:
-            case_entry = Cases(
-                case_id=case_id,
-                h3_sector="SOS_LOCATION",
-                zones=["EMERGENCY"],
-                symptoms=["SOS Triggered"],
-                severity="critical",
-                duration="unknown",
-                timestamp=datetime.utcnow(),
-                status="open",
-            )
-            session.add(case_entry)
-            await session.commit()
+        try:
+            async with async_session() as session:
+                case_entry = Cases(
+                    case_id=case_id,
+                    h3_sector="SOS_LOCATION",
+                    zones=["EMERGENCY"],
+                    symptoms=["SOS Triggered"],
+                    severity="critical",
+                    duration="unknown",
+                    timestamp=datetime.now(timezone.utc),
+                    status="open",
+                )
+                session.add(case_entry)
+                await session.commit()
+                print(f"✅ SOS {case_id} successfully saved to PostgreSQL")
+        except Exception as e:
+            print(f"❌ PostgreSQL SOS ERROR for case {case_id}: {str(e)}")
 
     # We broadcast the SOS event
     sos_payload = {
@@ -462,7 +468,7 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
 
                     # Update vault accessed info
                     vault_entry.accessed_by = doctor.doctor_id
-                    vault_entry.accessed_at = datetime.utcnow()
+                    vault_entry.accessed_at = datetime.now(timezone.utc)
                     await session.commit()
         except Exception as e:
             print(f"PostgreSQL error in accept_case: {e}")
@@ -561,7 +567,7 @@ async def list_cases():
                         "timestamp": (
                             c.timestamp.isoformat()
                             if c.timestamp
-                            else datetime.utcnow().isoformat()
+                            else datetime.now(timezone.utc).isoformat()
                         ),
                         "status": c.status,
                     }
