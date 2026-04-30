@@ -746,20 +746,9 @@ async def update_doctor_location(payload: DoctorLocationUpdate):
 
 @app.get("/health")
 async def health():
-    db_ok = False
-    if DB_AVAILABLE:
-        try:
-            async with async_session() as session:
-                await session.execute(select(1))
-            db_ok = True
-        except Exception as e:
-            print(f"DB check error: {e}")
-    
-    print(f"DB_AVAILABLE: {DB_AVAILABLE}, db_ok: {db_ok}")
-    print(f"DATABASE_URL: {os.getenv('DATABASE_URL', 'NOT SET')[:50]}...")
-    
+    db_url = os.getenv("DATABASE_URL", "")
     return {
         "status": "ok",
-        "postgres": db_ok,
+        "postgres": "supabase" in db_url,
         "ws_connections": len(manager.active),
     }
