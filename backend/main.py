@@ -760,6 +760,9 @@ async def health():
         except Exception as e:
             print(f"DB check error: {e}")
     
+    print(f"DB_AVAILABLE: {DB_AVAILABLE}, db_ok: {db_ok}")
+    print(f"DATABASE_URL: {os.getenv('DATABASE_URL', 'NOT SET')[:50]}...")
+    
     return {
         "status": "ok",
         "postgres": db_ok,
