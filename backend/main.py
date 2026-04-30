@@ -462,13 +462,65 @@ async def trigger_sos(payload: dict = Body(...)):
     """
     EMERGENCY PANIC BUTTON:
     Broadcasts a high-priority SOS alert to all hospitals immediately.
+    Also saves real GPS location to vault so accept_case can return it.
     """
+    global DB_AVAILABLE, _in_memory_vault, _in_memory_cases
     ts = datetime.now(timezone.utc).isoformat()
     case_id = payload.get("case_id", "SOS-URGENT")
     location = payload.get("location", {"lat": 0.0, "lng": 0.0})
+    patient_info = payload.get("patient", {})
 
-    # Save a minimal public case so it persists
-    public_doc = {
+    patient_name = patient_info.get("name", "SOS Patient")
+    patient_phone = patient_info.get("phone", "0000000000")
+    patient_age = str(patient_info.get("age", "Unknown"))
+
+    if DB_AVAILABLE:
+        try:
+            async with async_session() as session:
+                # Save public case
+                case_entry = Cases(
+                    case_id=case_id,
+                    h3_sector="SOS_LOCATION",
+                    zones=["EMERGENCY"],
+                    symptoms=["SOS Triggered"],
+                    severity="critical",
+                    duration="unknown",
+                    timestamp=datetime.utcnow(),
+                    status="open",
+                )
+                # Save vault with REAL location so accept_case can return it
+                vault_entry = Vault(
+                    case_id=case_id,
+                    encrypted_name=encrypt_pii(patient_name),
+                    encrypted_phone=encrypt_pii(patient_phone),
+                    encrypted_age=encrypt_pii(patient_age),
+                    exact_location=location,   # ← real GPS coords from frontend
+                    timestamp=datetime.utcnow(),
+                    accessed_by=None,
+                    status="open",
+                )
+                session.add(case_entry)
+                session.add(vault_entry)
+                await session.commit()
+                print(f"✅ SOS {case_id} saved to PostgreSQL with location {location}")
+        except Exception as e:
+            print(f"❌ PostgreSQL SOS ERROR for case {case_id}: {str(e)}")
+            DB_AVAILABLE = False
+
+    # Always keep in-memory fallback with real location
+    _in_memory_vault[case_id] = {
+        "case_id": case_id,
+        "encrypted_name": encrypt_pii(patient_name),
+        "encrypted_phone": encrypt_pii(patient_phone),
+        "encrypted_age": encrypt_pii(patient_age),
+        "exact_location": location,   # ← real GPS coords
+        "timestamp": ts,
+        "accessed_by": None,
+        "accessed_at": None,
+        "field_notes": None,
+        "status": "open",
+    }
+    _in_memory_cases[case_id] = {
         "case_id": case_id,
         "h3_sector": "SOS_LOCATION",
         "zones": ["EMERGENCY"],
@@ -477,29 +529,8 @@ async def trigger_sos(payload: dict = Body(...)):
         "timestamp": ts,
         "status": "open",
         "accepted_by": None,
-        "location": location,  # For SOS we might want the exact location if allowed
     }
 
-    if DB_AVAILABLE:
-        try:
-            async with async_session() as session:
-                case_entry = Cases(
-                    case_id=case_id,
-                    h3_sector="SOS_LOCATION",
-                    zones=["EMERGENCY"],
-                    symptoms=["SOS Triggered"],
-                    severity="critical",
-                    duration="unknown",
-                    timestamp=datetime.utcnow(),  # naive UTC — matches TIMESTAMP WITHOUT TIME ZONE
-                    status="open",
-                )
-                session.add(case_entry)
-                await session.commit()
-                print(f"✅ SOS {case_id} successfully saved to PostgreSQL")
-        except Exception as e:
-            print(f"❌ PostgreSQL SOS ERROR for case {case_id}: {str(e)}")
-
-    # We broadcast the SOS event
     sos_payload = {
         "event": "sos_alert",
         "case_id": case_id,
@@ -597,6 +628,7 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
                     )
                     case_entry = result.scalar_one_or_none()
                     if case_entry:
+                        # No vault entry but case exists — return case without PII
                         return {
                             "status": "unlocked",
                             "patient": {
@@ -604,7 +636,8 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
                                 "age": "Unknown",
                                 "phone": "0000000000",
                             },
-                            "location": {"lat": 12.9716, "lng": 77.5946},
+                            # No real location available for this case path
+                            "location": {"lat": 0.0, "lng": 0.0},
                         }
             except Exception:
                 pass
@@ -617,7 +650,8 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
                 "age": "35",
                 "phone": "9999999999",
             },
-            "location": {"lat": 12.9716, "lng": 77.5946},
+            # No real location on file for this case
+            "location": {"lat": 0.0, "lng": 0.0},
         }
 
     # Broadcast to other hospitals (remove from feed) + send doctor profile to patient
@@ -651,11 +685,11 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
             "location": vault_entry.exact_location,
         }
 
-    # Fallback
+    # Fallback — vault entry found but decoding failed
     return {
         "status": "unlocked",
-        "patient": {"name": "Demo Patient", "age": "35", "phone": "9999999999"},
-        "location": {"lat": 12.9716, "lng": 77.5946},
+        "patient": {"name": "Unknown", "age": "Unknown", "phone": "0000000000"},
+        "location": {"lat": 0.0, "lng": 0.0},
     }
 
 
