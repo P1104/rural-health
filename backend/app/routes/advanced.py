@@ -120,13 +120,17 @@ async def detect_outbreaks():
     """
     # Import the DB reference from main
     try:
-        from main import cases_col, MONGO_AVAILABLE
+        import sys, asyncio
+        if 'main' in sys.modules:
+            from main import cases_col, MONGO_AVAILABLE
+        else:
+            from backend.main import cases_col, MONGO_AVAILABLE
         if not MONGO_AVAILABLE or cases_col is None:
             return _demo_outbreak()
 
         cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
         cursor = cases_col.find({"timestamp": {"$gte": cutoff}}, {"_id": 0})
-        cases = await cursor.to_list(500)
+        cases = await asyncio.wait_for(cursor.to_list(500), timeout=5.0)
 
         # Count by H3 sector + top symptom
         from collections import Counter
@@ -152,7 +156,8 @@ async def detect_outbreaks():
                 })
 
         return {"alerts": alerts, "period_hours": 24, "total_cases": len(cases)}
-    except Exception:
+    except Exception as e:
+        print(f"Outbreak detection error: {e}")
         return _demo_outbreak()
 
 def _demo_outbreak():
