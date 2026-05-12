@@ -20,6 +20,7 @@ interface TriageAssistantProps {
 export default function TriageAssistant({ result, loading, lang = 'kn' }: TriageAssistantProps) {
   const [speaking, setSpeaking] = useState(false)
   const [ttsLoading, setTtsLoading] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
 
   const speak = async () => {
     if (!result?.advice) return
@@ -67,10 +68,18 @@ export default function TriageAssistant({ result, loading, lang = 'kn' }: Triage
   const urgency = result?.urgency_score || 0
   const urgencyColor = urgency >= 80 ? '#ef4444' : urgency >= 50 ? '#f59e0b' : '#10d98a'
 
-  if (!result && !loading) return null
+  if (dismissed || (!result && !loading)) return null
 
   return (
-    <div style={{ background: 'rgba(8,20,45,0.9)', border: '1px solid rgba(16,217,138,0.2)', borderLeft: '4px solid #10d98a', borderRadius: 20, padding: '20px 22px' }}>
+    <div style={{ background: 'rgba(8,20,45,0.9)', border: '1px solid rgba(16,217,138,0.2)', borderLeft: '4px solid #10d98a', borderRadius: 20, padding: '20px 22px', position: 'relative' }}>
+      
+      {/* Dismiss Button */}
+      <button 
+        onClick={() => setDismissed(true)}
+        style={{ position: 'absolute', top: 12, right: 12, background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 16 }}
+      >
+        ✕
+      </button>
 
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>

@@ -130,95 +130,141 @@ export default function DoctorTracker({ patientLat, patientLng, doctorLat, docto
         </div>
       )}
 
-      {/* ── Live Tracking Map (pure SVG) ── */}
+      {/* ── Live Tracking Map (3D Tactical Proximity HUD) ── */}
       <div style={{
-        width: '100%', height: 200, position: 'relative',
-        background: 'rgba(5,12,24,0.9)',
-        border: '1px solid rgba(16,217,138,0.15)',
-        borderRadius: 20, overflow: 'hidden',
+        width: '100%', height: 280, position: 'relative',
+        background: '#020617',
+        border: '1px solid rgba(59,130,246,0.3)',
+        borderRadius: 28, overflow: 'hidden',
+        perspective: '1200px',
+        boxShadow: '0 20px 50px rgba(0,0,0,0.6), inset 0 0 40px rgba(59,130,246,0.1)'
       }}>
-        {/* LIVE badge */}
-        <div style={{ position: 'absolute', top: 12, left: 14, zIndex: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#10d98a', animation: 'ping 1.5s infinite' }} />
-          <span style={{ fontSize: 9, color: '#10d98a', fontWeight: 800, letterSpacing: '0.08em' }}>LIVE TRACKING</span>
+        {/* Scanning Sweep Effect */}
+        {/* Top Overlay UI */}
+        <div style={{ position: 'absolute', top: 16, left: 20, zIndex: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#10d98a', boxShadow: '0 0 15px #10d98a', animation: 'pulse 2s infinite' }} />
+            <span style={{ fontSize: 11, color: '#10d98a', fontWeight: 900, letterSpacing: '0.15em' }}>MISSION ACTIVE</span>
+          </div>
+          <div style={{ display: 'flex', gap: 12, opacity: 0.6 }}>
+            <p style={{ fontSize: 9, color: '#94a3b8', fontWeight: 700, margin: 0 }}>ID: {Math.random().toString(36).substring(7).toUpperCase()}</p>
+            <p style={{ fontSize: 9, color: '#94a3b8', fontWeight: 700, margin: 0 }}>ENCRYPTED CHANNEL</p>
+          </div>
         </div>
 
         {distance && (
-          <div style={{ position: 'absolute', top: 12, right: 14, zIndex: 3 }}>
-            <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 800 }}>📍 {distance} km away</span>
+          <div style={{ position: 'absolute', top: 16, right: 20, zIndex: 10, textAlign: 'right' }}>
+            <span style={{ fontSize: 24, color: '#f59e0b', fontWeight: 900, textShadow: '0 0 20px rgba(245,158,11,0.5)', fontFamily: 'monospace' }}>
+              {distance}<span style={{ fontSize: 12, marginLeft: 2 }}>KM</span>
+            </span>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, marginTop: 4 }}>
+              {[1, 2, 3, 4, 5].map(i => (
+                <div key={i} style={{ 
+                  width: 8, height: 3, 
+                  background: parseFloat(distance) < (6 - i) ? '#f59e0b' : 'rgba(255,255,255,0.1)',
+                  borderRadius: 2 
+                }} />
+              ))}
+            </div>
           </div>
         )}
 
-        <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ position: 'absolute', inset: 0 }}>
-          <defs>
-            <pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse">
-              <path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="0.5"/>
-            </pattern>
-            <radialGradient id="patientGlow" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#10b981" stopOpacity="0.4" />
-              <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
-            </radialGradient>
-          </defs>
-          
-          {/* Map Background Pattern */}
-          <rect width="100" height="100" fill="url(#grid)" />
-          
-          {/* Major "Roads" simulation */}
-          <line x1="0" y1="50" x2="100" y2="50" stroke="rgba(255,255,255,0.05)" strokeWidth="2" />
-          <line x1="50" y1="0" x2="50" y2="100" stroke="rgba(255,255,255,0.05)" strokeWidth="2" />
-
-          {/* Route line doctor→patient (Premium Glow) */}
-          {doctorPos && (
-            <path
-              d={`M ${doctorPos.x} ${doctorPos.y} L 50 50`}
-              stroke="#3b82f6" strokeWidth="0.8" strokeDasharray="3 2" opacity="0.8"
-              fill="none"
-            >
-              <animate attributeName="stroke-dashoffset" from="10" to="0" dur="1s" repeatCount="indefinite" />
-            </path>
-          )}
-
-          {/* Patient (green) */}
-          <circle cx={50} cy={50} r={6} fill="url(#patientGlow)" />
-          <circle cx={50} cy={50} r={2} fill="#10b981" />
-          <circle cx={50} cy={50} r={5} fill="none" stroke="#10d98a" strokeWidth="0.4" opacity="0.5">
-            <animate attributeName="r" values="2;8;2" dur="2s" repeatCount="indefinite" />
-            <animate attributeName="opacity" values="0.6;0;0.6" dur="2s" repeatCount="indefinite" />
-          </circle>
-
-          {/* Doctor (blue - Uber-like Car Icon simulation) */}
-          {doctorPos && (
-            <g transform={`translate(${doctorPos.x - 2.5}, ${doctorPos.y - 2.5})`}>
-              <circle cx={2.5} cy={2.5} r={2.5} fill="#3b82f6" />
-              <circle cx={2.5} cy={2.5} r={5} fill="none" stroke="#3b82f6" strokeWidth="0.4" opacity="0.4">
-                <animate attributeName="r" values="2.5;7;2.5" dur="1.5s" repeatCount="indefinite" />
-                <animate attributeName="opacity" values="0.5;0;0.5" dur="1.5s" repeatCount="indefinite" />
-              </circle>
-            </g>
-          )}
-        </svg>
-
-        {/* Legend */}
+        {/* 3D Space */}
         <div style={{
-          position: 'absolute', bottom: 12, left: 0, right: 0,
-          display: 'flex', justifyContent: 'space-around', padding: '0 16px',
+          position: 'absolute', inset: 0,
+          transform: 'rotateX(40deg) translateY(-30px)',
+          transformStyle: 'preserve-3d',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#10d98a' }} />
-            <span style={{ fontSize: 10, color: '#10d98a', fontWeight: 700 }}>You</span>
+          {/* Grid with Depth */}
+          <div style={{
+            position: 'absolute', inset: -200,
+            backgroundImage: `
+              radial-gradient(circle at center, transparent 0%, #020617 70%),
+              linear-gradient(to right, rgba(59,130,246,0.1) 1px, transparent 1px),
+              linear-gradient(to bottom, rgba(59,130,246,0.1) 1px, transparent 1px)
+            `,
+            backgroundSize: '100% 100%, 50px 50px',
+          }} />
+
+          {/* Connection Path (Energy Stream) */}
+          {doctorPos && (
+            <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible' }}>
+              <path
+                d={`M ${doctorPos.x}% ${doctorPos.y}% L 50% 50%`}
+                fill="none"
+                stroke="rgba(59,130,246,0.2)"
+                strokeWidth="1"
+                strokeDasharray="4 4"
+              />
+              <circle r="3" fill="#3b82f6">
+                <animateMotion 
+                  path={`M ${doctorPos.x}% ${doctorPos.y}% L 50% 50%`} 
+                  dur="1.5s" 
+                  repeatCount="indefinite" 
+                />
+              </circle>
+            </svg>
+          )}
+
+          {/* Patient Marker */}
+          <div style={{
+            position: 'absolute', left: '50%', top: '50%',
+            transform: 'translate(-50%, -50%) translateZ(10px)',
+            width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center'
+          }}>
+            <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#10d98a', boxShadow: '0 0 30px #10d98a', zIndex: 2 }} />
+            <div style={{ position: 'absolute', width: '100%', height: '100%', border: '2px solid #10d98a', borderRadius: '50%', animation: 'ripple 3s infinite' }} />
+            <div style={{ position: 'absolute', width: '200%', height: '200%', border: '1px solid rgba(16,217,138,0.2)', borderRadius: '50%', animation: 'ripple 3s infinite 1s' }} />
           </div>
-          {doctorPos ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#3b82f6' }} />
-              <span style={{ fontSize: 10, color: '#3b82f6', fontWeight: 700 }}>
-                Dr. {doctorProfile?.name || 'Doctor'}
-              </span>
+
+          {/* Doctor Marker (3D Pin) */}
+          {doctorPos && (
+            <div style={{
+              position: 'absolute', left: `${doctorPos.x}%`, top: `${doctorPos.y}%`,
+              transform: 'translate(-50%, -50%) translateZ(30px)',
+              transition: 'all 1s cubic-bezier(0.4, 0, 0.2, 1)',
+              display: 'flex', flexDirection: 'column', alignItems: 'center'
+            }}>
+              <div style={{
+                width: 24, height: 24, borderRadius: '50% 50% 50% 0',
+                background: '#3b82f6', border: '2px solid white',
+                transform: 'rotate(-45deg)',
+                boxShadow: '0 0 20px rgba(59,130,246,0.8)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center'
+              }}>
+                <div style={{ width: 8, height: 8, background: 'white', borderRadius: '50%', transform: 'rotate(45deg)' }} />
+              </div>
+              <div style={{ width: 4, height: 20, background: 'linear-gradient(to bottom, #3b82f6, transparent)', marginTop: -5 }} />
             </div>
-          ) : (
-            <span style={{ fontSize: 10, color: '#475569' }}>⏳ Waiting for doctor GPS…</span>
           )}
         </div>
+
+        {/* Legend Panel */}
+        <div style={{
+          position: 'absolute', bottom: 20, left: 20, right: 20,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(10px)',
+          padding: '12px 20px', borderRadius: 20, border: '1px solid rgba(255,255,255,0.1)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#10d98a' }} />
+            <span style={{ fontSize: 12, color: 'white', fontWeight: 800 }}>YOUR LOCATION</span>
+          </div>
+          <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#3b82f6' }} />
+            <span style={{ fontSize: 12, color: 'white', fontWeight: 800 }}>
+              DR. {doctorProfile?.name.toUpperCase() || 'SEARCHING...'}
+            </span>
+          </div>
+        </div>
       </div>
+
+      <style>{`
+        @keyframes ripple { from { transform: scale(0.5); opacity: 1; } to { transform: scale(3); opacity: 0; } }
+        @keyframes sweep { 0%, 100% { transform: translateY(-100%); } 50% { transform: translateY(100%); } }
+        @keyframes pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.2); opacity: 0.7; } }
+      `}</style>
     </div>
   )
 }

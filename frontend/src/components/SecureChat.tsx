@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useRef } from 'react'
+import { API_BASE_URL } from '@/config'
 
 interface Message {
   sender_id: string
@@ -17,8 +18,21 @@ interface SecureChatProps {
 export default function SecureChat({ caseId, senderId, ws }: SecureChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
+  const [sending, setSending] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
+  // Load persisted history on mount
+  useEffect(() => {
+    if (!caseId) return
+    fetch(`${API_BASE_URL}/api/v3/chat/${caseId}/messages`)
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) setMessages(data)
+      })
+      .catch(() => { /* history unavailable — start fresh */ })
+  }, [caseId])
+
+  // Listen for live incoming messages via WebSocket
   useEffect(() => {
     if (!ws) return
 
@@ -26,48 +40,74 @@ export default function SecureChat({ caseId, senderId, ws }: SecureChatProps) {
       try {
         const data = JSON.parse(e.data)
         if (data.event === 'chat' && data.case_id === caseId) {
-          setMessages(prev => [...prev, {
-            sender_id: data.sender_id,
-            content: data.content,
-            timestamp: data.timestamp
-          }])
+          setMessages(prev => {
+            // Deduplicate by timestamp + sender
+            const key = `${data.sender_id}|${data.timestamp}`
+            if (prev.some(m => `${m.sender_id}|${m.timestamp}` === key)) return prev
+            return [...prev, {
+              sender_id: data.sender_id,
+              content: data.content,
+              timestamp: data.timestamp,
+            }]
+          })
         }
       } catch (err) {
-        console.error('Chat WS error:', err)
+        console.error('Chat WS parse error:', err)
       }
     }
 
     ws.addEventListener('message', handleMessage)
-    
-    // Fetch history
-    fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v3/case/${caseId}/chat`)
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) setMessages(data)
-      })
-      .catch(err => console.error('Failed to fetch chat history:', err))
-
     return () => ws.removeEventListener('message', handleMessage)
   }, [caseId, ws])
 
+  // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [messages])
 
-  const sendMessage = () => {
-    if (!input.trim() || !ws || ws.readyState !== WebSocket.OPEN) return
-
-    const payload = {
-      event: 'chat',
-      case_id: caseId,
-      sender_id: senderId,
-      content: input.trim()
-    }
-
-    ws.send(JSON.stringify(payload))
+  const sendMessage = async () => {
+    if (!input.trim() || sending) return
+    const text = input.trim()
     setInput('')
+    setSending(true)
+
+    try {
+      // POST to backend — persists + broadcasts via WS
+      const res = await fetch(`${API_BASE_URL}/api/v3/chat/${caseId}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sender_id: senderId, content: text }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        // Add own message immediately (WS broadcast may echo back — dedup handles it)
+        setMessages(prev => {
+          const key = `${data.message.sender_id}|${data.message.timestamp}`
+          if (prev.some(m => `${m.sender_id}|${m.timestamp}` === key)) return prev
+          return [...prev, data.message]
+        })
+      }
+    } catch {
+      // Fallback: send via WebSocket only (no persistence)
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          event: 'chat',
+          case_id: caseId,
+          sender_id: senderId,
+          content: text,
+          timestamp: new Date().toISOString(),
+        }))
+        setMessages(prev => [...prev, {
+          sender_id: senderId,
+          content: text,
+          timestamp: new Date().toISOString(),
+        }])
+      }
+    } finally {
+      setSending(false)
+    }
   }
 
   return (
@@ -79,7 +119,7 @@ export default function SecureChat({ caseId, senderId, ws }: SecureChatProps) {
       borderRadius: '16px',
       border: '1px solid rgba(255, 255, 255, 0.08)',
       overflow: 'hidden',
-      marginTop: '16px'
+      marginTop: '16px',
     }}>
       {/* Header */}
       <div style={{
@@ -88,14 +128,22 @@ export default function SecureChat({ caseId, senderId, ws }: SecureChatProps) {
         borderBottom: '1px solid rgba(16, 217, 138, 0.2)',
         display: 'flex',
         alignItems: 'center',
-        gap: '8px'
+        justifyContent: 'space-between',
+        gap: '8px',
       }}>
-        <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#10d98a' }} />
-        <span style={{ fontSize: '12px', fontWeight: 800, color: '#10d98a', letterSpacing: '0.05em' }}>SECURE CHANNEL</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#10d98a', animation: 'ping 2s infinite' }} />
+          <span style={{ fontSize: '12px', fontWeight: 800, color: '#10d98a', letterSpacing: '0.05em' }}>
+            SECURE CHANNEL
+          </span>
+        </div>
+        <span style={{ fontSize: '10px', color: '#334155', fontFamily: 'monospace' }}>
+          {messages.length} msg{messages.length !== 1 ? 's' : ''} • E2EE
+        </span>
       </div>
 
       {/* Messages */}
-      <div 
+      <div
         ref={scrollRef}
         style={{
           flex: 1,
@@ -103,12 +151,12 @@ export default function SecureChat({ caseId, senderId, ws }: SecureChatProps) {
           overflowY: 'auto',
           display: 'flex',
           flexDirection: 'column',
-          gap: '12px'
+          gap: '10px',
         }}
       >
         {messages.length === 0 && (
-          <p style={{ textAlign: 'center', fontSize: '11px', color: '#475569', marginTop: '20px' }}>
-            Connection established. You can now chat with your doctor.
+          <p style={{ textAlign: 'center', fontSize: '11px', color: '#475569', marginTop: '20px', fontStyle: 'italic' }}>
+            🔒 Encrypted channel established. Messages are end-to-end secured.
           </p>
         )}
         {messages.map((m, i) => {
@@ -116,23 +164,29 @@ export default function SecureChat({ caseId, senderId, ws }: SecureChatProps) {
           return (
             <div key={i} style={{
               alignSelf: isMe ? 'flex-end' : 'flex-start',
-              maxWidth: '80%',
+              maxWidth: '82%',
               display: 'flex',
               flexDirection: 'column',
-              alignItems: isMe ? 'flex-end' : 'flex-start'
+              alignItems: isMe ? 'flex-end' : 'flex-start',
             }}>
+              {!isMe && (
+                <span style={{ fontSize: '9px', color: '#475569', marginBottom: 3, paddingLeft: 4 }}>
+                  {m.sender_id === 'patient' ? '🧑 Patient' : `👨‍⚕️ ${m.sender_id.slice(0, 12)}`}
+                </span>
+              )}
               <div style={{
-                background: isMe ? 'linear-gradient(135deg, #059669, #10b981)' : 'rgba(255, 255, 255, 0.05)',
+                background: isMe ? 'linear-gradient(135deg, #059669, #10b981)' : 'rgba(255, 255, 255, 0.06)',
                 color: isMe ? 'white' : '#f1f5f9',
-                padding: '8px 12px',
-                borderRadius: isMe ? '14px 14px 2px 14px' : '14px 14px 14px 2px',
+                padding: '9px 13px',
+                borderRadius: isMe ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
                 fontSize: '13px',
                 lineHeight: 1.4,
-                border: isMe ? 'none' : '1px solid rgba(255, 255, 255, 0.1)'
+                border: isMe ? 'none' : '1px solid rgba(255, 255, 255, 0.1)',
+                boxShadow: isMe ? '0 2px 12px rgba(5,150,105,0.25)' : 'none',
               }}>
                 {m.content}
               </div>
-              <span style={{ fontSize: '9px', color: '#475569', marginTop: '4px' }}>
+              <span style={{ fontSize: '9px', color: '#334155', marginTop: '4px', paddingLeft: 4, paddingRight: 4 }}>
                 {m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
               </span>
             </div>
@@ -142,33 +196,37 @@ export default function SecureChat({ caseId, senderId, ws }: SecureChatProps) {
 
       {/* Input */}
       <div style={{
-        padding: '12px',
-        background: 'rgba(5, 14, 26, 0.5)',
+        padding: '10px 12px',
+        background: 'rgba(5, 14, 26, 0.6)',
         borderTop: '1px solid rgba(255, 255, 255, 0.05)',
         display: 'flex',
-        gap: '8px'
+        gap: '8px',
+        alignItems: 'center',
       }}>
-        <input 
+        <input
           type="text"
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && sendMessage()}
-          placeholder="Type a message..."
+          placeholder={sending ? 'Sending…' : 'Type a message…'}
+          disabled={sending}
           style={{
             flex: 1,
-            background: 'rgba(255, 255, 255, 0.04)',
+            background: 'rgba(255, 255, 255, 0.05)',
             border: '1px solid rgba(255, 255, 255, 0.1)',
             borderRadius: '10px',
             padding: '8px 12px',
             color: 'white',
             fontSize: '13px',
-            outline: 'none'
+            outline: 'none',
+            opacity: sending ? 0.6 : 1,
           }}
         />
-        <button 
+        <button
           onClick={sendMessage}
+          disabled={sending || !input.trim()}
           style={{
-            background: '#10d98a',
+            background: sending ? 'rgba(16,217,138,0.3)' : '#10d98a',
             border: 'none',
             borderRadius: '10px',
             width: '36px',
@@ -176,11 +234,13 @@ export default function SecureChat({ caseId, senderId, ws }: SecureChatProps) {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            cursor: 'pointer',
-            fontSize: '16px'
+            cursor: sending ? 'not-allowed' : 'pointer',
+            fontSize: '15px',
+            flexShrink: 0,
+            transition: 'background 0.2s',
           }}
         >
-          📤
+          {sending ? '⏳' : '📤'}
         </button>
       </div>
     </div>

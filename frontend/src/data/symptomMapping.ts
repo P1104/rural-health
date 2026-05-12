@@ -74,6 +74,7 @@ export const SEVERITIES = [
   { id: 'stable',    label: 'Stable',    sublabel: 'I can manage',     emoji: '🙂', className: 'stable' },
   { id: 'moderate',  label: 'Moderate',  sublabel: 'Getting worse',    emoji: '😟', className: 'moderate' },
   { id: 'emergency', label: 'Emergency', sublabel: 'Need help now!',   emoji: '😫', className: 'emergency' },
+  { id: 'critical',  label: 'CRITICAL',  sublabel: 'Life-Threatening!', emoji: '🆘', className: 'critical' },
 ]
 
 export const FIRST_AID: Record<string, string> = {

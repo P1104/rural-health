@@ -32,45 +32,77 @@ class ImageAnalysisRequest(BaseModel):
     image_base64: str
     symptoms: List[str]
 
+def _mock_vision_result(symptoms: List[str]) -> dict:
+    """Rule-based fallback when Gemini API is unavailable."""
+    if any("rash" in s.lower() or "itch" in s.lower() for s in symptoms):
+        return {
+            "title": "Dermatological Assessment",
+            "observation": "Visual patterns suggest a localized inflammatory response. The affected area shows signs of redness and irritation.",
+            "suggestion": "Keep the area clean and avoid applying unverified home remedies. Do not scratch. Doctor is on the way.",
+            "urgency": "Low - Stable"
+        }
+    elif any("wound" in s.lower() or "cut" in s.lower() or "bleed" in s.lower() for s in symptoms):
+        return {
+            "title": "Trauma Assessment",
+            "observation": "Image shows signs of a laceration or open wound requiring attention.",
+            "suggestion": "Apply firm, continuous pressure with a clean cloth. Do not remove the cloth. Elevate the limb if possible.",
+            "urgency": "Medium - Requires Immediate Cleaning"
+        }
+    return {
+        "title": "General AI Observation",
+        "observation": "AI has logged the image for the responding doctor's review on arrival.",
+        "suggestion": "Rest in a comfortable position and stay hydrated. Do not eat or drink if surgery may be needed.",
+        "urgency": "Informational"
+    }
+
 @router.post("/analysis/vision")
 async def analyze_medical_image(payload: ImageAnalysisRequest):
     """
-    Analyzes a patient's photo (rash, wound, etc.) using Gemini Vision.
-    Provides immediate visual feedback before the doctor arrives.
+    Analyzes a patient's photo using Gemini 1.5 Flash Vision.
+    Falls back to rule-based mock if GEMINI_API_KEY is not configured.
     """
-    # In production, this would call Gemini 1.5 Flash Vision
-    # For now, we simulate based on symptoms or basic image 'scanning'
-    
-    analysis_results = {
-        "rash": {
-            "title": "Dermatological Assessment",
-            "observation": "Visual patterns suggest a localized inflammatory response.",
-            "suggestion": "Keep the area clean and avoid applying unverified home remedies until the doctor arrives.",
-            "urgency": "Low - Stable"
-        },
-        "wound": {
-            "title": "Trauma Assessment",
-            "observation": "Image shows a laceration with moderate edges.",
-            "suggestion": "Apply firm pressure with a clean cloth. Do not apply turmeric or ash.",
-            "urgency": "Medium - Requires Cleaning"
-        },
-        "default": {
-            "title": "General AI Observation",
-            "observation": "AI analysis is inconclusive but has logged the image for the responding doctor.",
-            "suggestion": "Rest in a comfortable position and stay hydrated.",
-            "urgency": "Informational"
-        }
-    }
-    
-    # Simple logic to choose a mock response
-    key = "default"
-    if any("rash" in s.lower() or "itch" in s.lower() for s in payload.symptoms):
-        key = "rash"
-    elif any("wound" in s.lower() or "cut" in s.lower() or "bleed" in s.lower() for s in payload.symptoms):
-        key = "wound"
-        
-    await asyncio.sleep(2) # Simulate AI processing time
-    return analysis_results.get(key)
+    gemini_key = os.getenv("GEMINI_API_KEY", "")
+
+    if gemini_key:
+        try:
+            import json as _json
+            symptom_list = ", ".join(payload.symptoms) if payload.symptoms else "general discomfort"
+            prompt_text = (
+                f"You are a medical AI assistant for rural India. A patient has uploaded a photo. "
+                f"Reported symptoms: {symptom_list}. "
+                "Analyze the image carefully and respond ONLY with a valid JSON object using these exact keys: "
+                '{"title": "brief assessment type", "observation": "2-3 sentences describing what you see", '
+                '"suggestion": "2-3 immediate first-aid steps a bystander can follow", "urgency": "Low/Medium/High - brief note"}. '
+                "Be cautious — never give a definitive diagnosis. Use 'may suggest' or 'appears to show'."
+            )
+
+            # Strip data URI prefix if present
+            img_data = payload.image_base64
+            if "," in img_data:
+                img_data = img_data.split(",", 1)[1]
+
+            async with httpx.AsyncClient(timeout=25) as client:
+                resp = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}",
+                    json={
+                        "contents": [{
+                            "parts": [
+                                {"text": prompt_text},
+                                {"inline_data": {"mime_type": "image/jpeg", "data": img_data}}
+                            ]
+                        }],
+                        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 300}
+                    }
+                )
+                if resp.status_code == 200:
+                    raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    clean = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+                    return _json.loads(clean)
+        except Exception as e:
+            print(f"Gemini Vision error: {e} — falling back to rule-based")
+
+    await asyncio.sleep(1.5)  # Simulate processing
+    return _mock_vision_result(payload.symptoms)
 
 def encrypt_data(text: str) -> str:
     if REAL_ENCRYPTION and cipher:

@@ -38,6 +38,7 @@ function HospitalContent() {
   const [cases, setCases] = useState<LiveCase[]>([])
   const [activeCase, setActiveCase] = useState<LiveCase | null>(null)
   const [acceptedCaseIds, setAcceptedCaseIds] = useState<Set<string>>(new Set())
+  const [acceptedAt, setAcceptedAt] = useState<Record<string, Date>>({})
   const [decrypting, setDecrypting] = useState(false)
   const [decrypted, setDecrypted] = useState(false)
   const [patientData, setPatientData] = useState<any>(null)
@@ -60,10 +61,19 @@ function HospitalContent() {
   const [connectionMode, setConnectionMode] = useState<'websocket' | 'polling'>('websocket')
   const [view, setView] = useState<'live' | 'history'>('live')
   const [history, setHistory] = useState<any[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
   const [showPrescriptionModal, setShowPrescriptionModal] = useState(false)
   const [prescriptionNotes, setPrescriptionNotes] = useState('')
   const [generatedPrescription, setGeneratedPrescription] = useState<any>(null)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [isSendingPrescription, setIsSendingPrescription] = useState(false)
+  const [showSnakebiteModal, setShowSnakebiteModal] = useState(false)
+  const [showTelemedicineModal, setShowTelemedicineModal] = useState(false)
+  const [dischargedCase, setDischargedCase] = useState<any>(null)
+  const [telemedicineSlots, setTelemedicineSlots] = useState<any[]>([])
+  const [selectedSlot, setSelectedSlot] = useState<string | null>(null)
+  const [bookingResult, setBookingResult] = useState<any>(null)
+  const [isBooking, setIsBooking] = useState(false)
 
   const handleSaveNote = async () => {
     if (!activeCase) return
@@ -79,12 +89,53 @@ function HospitalContent() {
     } catch { }
   }
 
+  const fetchHistory = async () => {
+    setHistoryLoading(true)
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v3/cases/history`)
+      if (res.ok) {
+        const data = await res.json()
+        setHistory(Array.isArray(data) ? data : [])
+      }
+    } catch { } finally { setHistoryLoading(false) }
+  }
+
+  const syncShift = async (isOnShift: boolean) => {
+    const token = localStorage.getItem('doctor_token') || 'DR-DEMO'
+    const name = localStorage.getItem('doctor_name') || doctorName
+    const hospital = localStorage.getItem('doctor_hospital') || ''
+    try {
+      await fetch(`${API_BASE_URL}/api/v3/doctor/shift`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doctor_id: token, on_shift: isOnShift, name, hospital }),
+      })
+    } catch { }
+  }
+
+  const sendPrescription = async () => {
+    if (!activeCase || !generatedPrescription) return
+    setIsSendingPrescription(true)
+    try {
+      await fetch(`${API_BASE_URL}/api/v3/case/${activeCase.case_id}/prescription/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prescription: generatedPrescription }),
+      })
+      setShowPrescriptionModal(false)
+      setGeneratedPrescription(null)
+      setPrescriptionNotes('')
+    } catch { } finally { setIsSendingPrescription(false) }
+  }
+
   // Auth check + WebSocket connection + Outbreak fetch
   useEffect(() => {
     setIsMounted(true)
     if (typeof window === 'undefined') return
     const name = localStorage.getItem('doctor_name')
     if (name) setDoctorName(name)
+    // Register as on-shift on mount
+    setTimeout(() => syncShift(true), 500)
 
     // Fetch real cases from backend
     fetch(`${API_BASE_URL}/api/v3/cases`)
@@ -245,6 +296,7 @@ function HospitalContent() {
   const handleAccept = async (c: LiveCase) => {
     setActiveCase(c); setDecrypted(false); setPatientData(null); setCaseSummary(null); setDecrypting(true)
     setAcceptedCaseIds(prev => new Set(prev).add(c.case_id))
+    setAcceptedAt(prev => ({ ...prev, [c.case_id]: new Date() }))
     try {
       const token = localStorage.getItem('doctor_token') || `DR-${doctorName.replace(/\s+/g, '-').toUpperCase()}`
       const hospital = localStorage.getItem('doctor_hospital') || localStorage.getItem('doctor_name') || 'Rural Health Centre'
@@ -252,7 +304,10 @@ function HospitalContent() {
       const casesHandled = parseInt(localStorage.getItem('doctor_cases') || '') || (Math.floor(Math.random() * 40) + 10)
       const res = await fetch(`${API_BASE_URL}/api/v3/accept/${c.case_id}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ doctor_id: token, doctor_name: doctorName, hospital, designation, cases_handled: casesHandled }),
       })
       if (res.ok) {
@@ -335,9 +390,20 @@ function HospitalContent() {
         }),
       })
       const data = await res.json()
-      alert(`Case Discharged.\n\nSummary: ${data.summary?.discharge_summary}\n\nFollow-up: ${data.summary?.follow_up}`)
+      // Store discharge data and show telemedicine booking modal
+      setDischargedCase({ case_id: activeCase.case_id, summary: data.summary })
+      // Fetch available slots for this doctor
+      const token = localStorage.getItem('doctor_token') || 'DR-DEMO'
+      const slotsRes = await fetch(`${API_BASE_URL}/api/v3/telemedicine/slots/${token}`)
+      if (slotsRes.ok) {
+        const slotsData = await slotsRes.json()
+        setTelemedicineSlots((slotsData.slots || []).filter((s: any) => s.available).slice(0, 8))
+      }
       setCases(prev => prev.filter(c => c.case_id !== activeCase.case_id))
       setActiveCase(null)
+      setShowTelemedicineModal(true)
+      setSelectedSlot(null)
+      setBookingResult(null)
     } catch { }
   }
 
@@ -446,7 +512,7 @@ function HospitalContent() {
           </div>
           {/* Shift Toggle */}
           <button
-            onClick={() => setOnShift(s => !s)}
+            onClick={() => { const next = !onShift; setOnShift(next); syncShift(next) }}
             style={{ fontSize: 10, background: onShift ? 'rgba(16,217,138,0.1)' : 'rgba(239,68,68,0.1)', color: onShift ? '#10d98a' : '#ef4444', border: `1px solid ${onShift ? 'rgba(16,217,138,0.3)' : 'rgba(239,68,68,0.3)'}`, padding: '5px 12px', borderRadius: 8, cursor: 'pointer', fontWeight: 800 }}
           >
             {onShift ? '🟢 On Shift' : '🔴 Off Shift'}
@@ -481,7 +547,7 @@ function HospitalContent() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <div style={{ display: 'flex', gap: 12 }}>
               <button onClick={() => setView('live')} style={{ fontSize: 13, fontWeight: 800, background: 'none', border: 'none', color: view === 'live' ? '#10d98a' : '#475569', borderBottom: view === 'live' ? '2px solid #10d98a' : 'none', cursor: 'pointer', padding: '4px 0' }}>Live Feed</button>
-              <button onClick={() => setView('history')} style={{ fontSize: 13, fontWeight: 800, background: 'none', border: 'none', color: view === 'history' ? '#10d98a' : '#475569', borderBottom: view === 'history' ? '2px solid #10d98a' : 'none', cursor: 'pointer', padding: '4px 0' }}>Case History</button>
+              <button onClick={() => { setView('history'); fetchHistory() }} style={{ fontSize: 13, fontWeight: 800, background: 'none', border: 'none', color: view === 'history' ? '#10d98a' : '#475569', borderBottom: view === 'history' ? '2px solid #10d98a' : 'none', cursor: 'pointer', padding: '4px 0' }}>Case History</button>
             </div>
           </div>
 
@@ -540,11 +606,32 @@ function HospitalContent() {
                 </div>
               ))}
             </>
-          ) : (
+          ) : historyLoading ? (
             <div style={{ textAlign: 'center', padding: '60px 0', opacity: 0.5 }}>
+              <div style={{ width: 40, height: 40, border: '3px solid rgba(16,217,138,0.3)', borderTopColor: '#10d98a', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 16px' }} />
+              <p style={{ fontSize: 13, color: '#475569' }}>Loading case history…</p>
+            </div>
+          ) : history.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '60px 0', opacity: 0.4 }}>
               <span style={{ fontSize: 48 }}>📖</span>
-              <p style={{ fontSize: 14, marginTop: 12 }}>Historical records are archived in the secure vault.</p>
-              <button className="btn-secondary" style={{ marginTop: 20, padding: '10px 24px' }}>Request Audit Access</button>
+              <p style={{ fontSize: 14, marginTop: 12, color: '#475569' }}>No closed cases yet. Accepted cases appear here after discharge.</p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {history.map(c => (
+                <div key={c.case_id} style={{ background: 'rgba(8,20,45,0.8)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 16, padding: '16px 20px', position: 'relative', overflow: 'hidden' }}>
+                  <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: c.status === 'discharged' ? '#10d98a' : '#f59e0b', borderRadius: '4px 0 0 4px' }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <p style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: '#94a3b8' }}>{c.case_id}</p>
+                    <span style={{ background: c.status === 'discharged' ? 'rgba(16,217,138,0.1)' : 'rgba(245,158,11,0.1)', color: c.status === 'discharged' ? '#10d98a' : '#f59e0b', fontSize: 10, fontWeight: 800, padding: '3px 10px', borderRadius: 20, textTransform: 'uppercase' as const }}>{c.status}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' as const, marginBottom: 8 }}>
+                    {(c.zones || []).map((z: string) => <span key={z} style={{ background: 'rgba(16,217,138,0.08)', color: '#10d98a', border: '1px solid rgba(16,217,138,0.2)', borderRadius: 10, padding: '2px 8px', fontSize: 10 }}>📍{z}</span>)}
+                    {(c.symptoms || []).map((s: string) => <span key={s} style={{ background: 'rgba(255,255,255,0.04)', color: '#64748b', borderRadius: 10, padding: '2px 8px', fontSize: 10 }}>{s}</span>)}
+                  </div>
+                  <p style={{ fontSize: 11, color: '#334155' }}>{isMounted && c.timestamp ? new Date(c.timestamp).toLocaleString('en-IN') : '—'}{c.accepted_by ? ` • Dr. ${c.accepted_by.slice(0, 16)}` : ''}</p>
+                </div>
+              ))}
             </div>
           )}
         </main>
@@ -594,7 +681,7 @@ function HospitalContent() {
 
                   {/* Specialized Protocol Button */}
                   <button
-                    onClick={() => alert('Snakebite Protocol Activated:\n1. Immobilize limb\n2. Do not use tourniquet\n3. Check for Anti-Venom availability at PHC')}
+                    onClick={() => setShowSnakebiteModal(true)}
                     style={{ width: '100%', padding: '12px', borderRadius: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', fontSize: 12, fontWeight: 800, marginBottom: 12, cursor: 'pointer' }}
                   >
                     🐍 Rapid Snakebite Protocol
@@ -628,23 +715,29 @@ function HospitalContent() {
                   {/* Case Timeline */}
                   <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 14, padding: '14px 16px', marginBottom: 12, marginTop: 12 }}>
                     <p style={{ fontSize: 9, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 800, marginBottom: 12 }}>Case Timeline</p>
-                    {[
-                      { step: 'Case Triggered', done: true, time: '10:02' },
-                      { step: 'Doctor Dispatched', done: true, time: '10:05' },
-                      { step: 'Patient Contact', done: decrypted, time: decrypted ? '10:07' : '--:--' },
-                      { step: 'Stabilization', done: false, time: '--:--' }
-                    ].map((s: any, i: number) => (
-                      <div key={i} style={{ display: 'flex', gap: 12, marginBottom: 8, opacity: s.done ? 1 : 0.4 }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                          <div style={{ width: 8, height: 8, borderRadius: '50%', background: s.done ? '#10d98a' : '#475569' }} />
-                          {i < 3 && <div style={{ width: 1, height: 16, background: '#475569' }} />}
+                    {(() => {
+                      const caseTime = activeCase?.timestamp ? new Date(activeCase.timestamp) : new Date()
+                      const dispatchTime = acceptedAt[activeCase?.case_id || ''] || new Date(caseTime.getTime() + 3 * 60000)
+                      const contactTime = decrypted ? new Date() : null
+                      const fmt = (d: Date) => d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+                      return [
+                        { step: 'Case Triggered', done: true, time: fmt(caseTime) },
+                        { step: 'Doctor Dispatched', done: true, time: fmt(dispatchTime) },
+                        { step: 'Patient Contact', done: decrypted, time: contactTime ? fmt(contactTime) : '--:--' },
+                        { step: 'Stabilization', done: false, time: '--:--' },
+                      ].map((s: any, i: number) => (
+                        <div key={i} style={{ display: 'flex', gap: 12, marginBottom: 8, opacity: s.done ? 1 : 0.4 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                            <div style={{ width: 8, height: 8, borderRadius: '50%', background: s.done ? '#10d98a' : '#475569' }} />
+                            {i < 3 && <div style={{ width: 1, height: 16, background: '#475569' }} />}
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <p style={{ fontSize: 11, fontWeight: 700 }}>{s.step}</p>
+                            <p style={{ fontSize: 9, color: '#475569' }}>{s.time}</p>
+                          </div>
                         </div>
-                        <div style={{ flex: 1 }}>
-                          <p style={{ fontSize: 11, fontWeight: 700 }}>{s.step}</p>
-                          <p style={{ fontSize: 9, color: '#475569' }}>{s.time}</p>
-                        </div>
-                      </div>
-                    ))}
+                      ))
+                    })()}
                   </div>
 
                   <button
@@ -785,15 +878,153 @@ function HospitalContent() {
                   <p style={{ fontSize: 13, color: '#f1f5f9', marginTop: 16 }}><b>Advice:</b> {generatedPrescription.advice}</p>
                   <p style={{ fontSize: 12, color: '#10d98a', marginTop: 8 }}><b>Follow-up:</b> {generatedPrescription.follow_up}</p>
                 </div>
-                <button 
-                  onClick={() => {
-                    alert('Prescription sent to patient!')
-                    setShowPrescriptionModal(false)
-                    setGeneratedPrescription(null)
-                  }}
-                  style={{ width: '100%', padding: '16px', borderRadius: 16, background: '#10d98a', border: 'none', color: '#050e1a', fontWeight: 800, cursor: 'pointer' }}
+                <button
+                  onClick={sendPrescription}
+                  disabled={isSendingPrescription}
+                  style={{ width: '100%', padding: '16px', borderRadius: 16, background: isSendingPrescription ? '#064e3b' : '#10d98a', border: 'none', color: '#050e1a', fontWeight: 800, cursor: isSendingPrescription ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
                 >
-                  📤 Send to Patient's App
+                  {isSendingPrescription ? '⏳ Sending…' : '📤 Send to Patient’s App'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Snakebite Protocol Modal */}
+      {showSnakebiteModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div style={{ background: '#0a0f1e', border: '2px solid rgba(239,68,68,0.4)', borderRadius: 24, width: '100%', maxWidth: 480, padding: 32, boxShadow: '0 20px 80px rgba(239,68,68,0.3)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 28 }}>🐍</span>
+                <div>
+                  <h3 style={{ fontSize: 18, fontWeight: 900, color: '#ef4444' }}>Snakebite Emergency Protocol</h3>
+                  <p style={{ fontSize: 11, color: '#475569' }}>WHO + Indian NHP Guidelines</p>
+                </div>
+              </div>
+              <button onClick={() => setShowSnakebiteModal(false)} style={{ background: 'none', border: 'none', color: '#475569', fontSize: 24, cursor: 'pointer', lineHeight: 1 }}>×</button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+              {[
+                { icon: '✅', step: 'Keep patient STILL — no walking, no running', color: '#10d98a' },
+                { icon: '✅', step: 'Immobilize bitten limb below heart level', color: '#10d98a' },
+                { icon: '✅', step: 'Remove rings, watches, tight clothing from bitten limb', color: '#10d98a' },
+                { icon: '✅', step: 'Mark bite site time with pen to track swelling spread', color: '#10d98a' },
+                { icon: '❌', step: 'DO NOT cut or suck the wound', color: '#ef4444' },
+                { icon: '❌', step: 'DO NOT apply tourniquet or ice', color: '#ef4444' },
+                { icon: '❌', step: 'DO NOT give aspirin or NSAIDs', color: '#ef4444' },
+              ].map((item, i) => (
+                <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '10px 14px', background: item.color === '#ef4444' ? 'rgba(239,68,68,0.07)' : 'rgba(16,217,138,0.05)', borderRadius: 10, border: `1px solid ${item.color}22` }}>
+                  <span style={{ fontSize: 14, flexShrink: 0 }}>{item.icon}</span>
+                  <p style={{ fontSize: 13, color: item.color === '#ef4444' ? '#fca5a5' : '#86efac', fontWeight: 600, lineHeight: 1.4 }}>{item.step}</p>
+                </div>
+              ))}
+            </div>
+            <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 12, padding: '12px 16px', marginBottom: 20 }}>
+              <p style={{ fontSize: 11, fontWeight: 800, color: '#f59e0b', marginBottom: 4 }}>⚠️ Anti-Venom Note</p>
+              <p style={{ fontSize: 12, color: '#fbbf24' }}>Polyvalent Anti-Snake Venom (ASV) must be administered at PHC/CHC only. Confirm stock availability before transport.</p>
+            </div>
+            <button onClick={() => setShowSnakebiteModal(false)} style={{ width: '100%', padding: '14px', borderRadius: 14, background: 'linear-gradient(135deg,#dc2626,#ef4444)', border: 'none', color: 'white', fontWeight: 800, cursor: 'pointer', fontSize: 14 }}>
+              Understood — Begin Response
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Telemedicine Follow-Up Booking Modal */}
+      {showTelemedicineModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div style={{ background: '#050e1a', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 24, width: '100%', maxWidth: 520, padding: 32, boxShadow: '0 20px 80px rgba(59,130,246,0.2)', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <div>
+                <h3 style={{ fontSize: 20, fontWeight: 900 }}>📅 Book Follow-Up Call</h3>
+                <p style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>Case {dischargedCase?.case_id} — Discharged ✅</p>
+              </div>
+              <button onClick={() => setShowTelemedicineModal(false)} style={{ background: 'none', border: 'none', color: '#475569', fontSize: 24, cursor: 'pointer' }}>×</button>
+            </div>
+
+            {dischargedCase?.summary && (
+              <div style={{ background: 'rgba(16,217,138,0.05)', border: '1px solid rgba(16,217,138,0.15)', borderRadius: 14, padding: '12px 16px', marginBottom: 20 }}>
+                <p style={{ fontSize: 11, color: '#10d98a', fontWeight: 800, marginBottom: 4 }}>DISCHARGE SUMMARY</p>
+                <p style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.5 }}>{dischargedCase.summary.discharge_summary || 'Patient stabilized and discharged.'}</p>
+                {dischargedCase.summary.follow_up && <p style={{ fontSize: 12, color: '#f59e0b', marginTop: 6 }}>📋 {dischargedCase.summary.follow_up}</p>}
+              </div>
+            )}
+
+            {!bookingResult ? (
+              <>
+                <p style={{ fontSize: 13, color: '#64748b', marginBottom: 16 }}>Select a slot for the patient's telemedicine follow-up:</p>
+                {telemedicineSlots.length === 0 ? (
+                  <p style={{ fontSize: 13, color: '#475569', textAlign: 'center', padding: '20px 0' }}>No slots available. The patient can call the clinic directly.</p>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 20 }}>
+                    {telemedicineSlots.map(slot => (
+                      <button
+                        key={slot.slot_key}
+                        onClick={() => setSelectedSlot(slot.slot_key === selectedSlot ? null : slot.slot_key)}
+                        style={{
+                          padding: '12px', borderRadius: 12, cursor: 'pointer', textAlign: 'left',
+                          background: selectedSlot === slot.slot_key ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.03)',
+                          border: `1px solid ${selectedSlot === slot.slot_key ? 'rgba(59,130,246,0.5)' : 'rgba(255,255,255,0.06)'}`,
+                          color: selectedSlot === slot.slot_key ? '#93c5fd' : '#94a3b8',
+                        }}
+                      >
+                        <p style={{ fontSize: 12, fontWeight: 700 }}>{slot.display}</p>
+                        <p style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>📹 Video call (Jitsi)</p>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button
+                    disabled={!selectedSlot || isBooking}
+                    onClick={async () => {
+                      if (!selectedSlot || !dischargedCase) return
+                      setIsBooking(true)
+                      const [date, time] = selectedSlot.split('T')
+                      const token = localStorage.getItem('doctor_token') || 'DR-DEMO'
+                      try {
+                        const res = await fetch(`${API_BASE_URL}/api/v3/telemedicine/book`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            case_id: dischargedCase.case_id,
+                            doctor_id: token,
+                            patient_phone: patientData?.patient?.phone || '0000000000',
+                            preferred_date: date,
+                            preferred_time: time,
+                            notes: currentNote || '',
+                          }),
+                        })
+                        const data = await res.json()
+                        setBookingResult(data)
+                      } catch { } finally { setIsBooking(false) }
+                    }}
+                    style={{ flex: 1, padding: '14px', borderRadius: 14, background: selectedSlot ? 'linear-gradient(135deg,#2563eb,#3b82f6)' : 'rgba(255,255,255,0.05)', border: 'none', color: selectedSlot ? 'white' : '#334155', fontWeight: 800, cursor: selectedSlot ? 'pointer' : 'not-allowed', fontSize: 14 }}
+                  >
+                    {isBooking ? '⏳ Booking…' : '📅 Confirm Booking'}
+                  </button>
+                  <button onClick={() => setShowTelemedicineModal(false)} style={{ padding: '14px 20px', borderRadius: 14, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)', color: '#64748b', fontWeight: 700, cursor: 'pointer' }}>
+                    Skip
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
+                <p style={{ fontSize: 18, fontWeight: 900, marginBottom: 8 }}>Follow-Up Booked!</p>
+                <p style={{ fontSize: 14, color: '#94a3b8', marginBottom: 16 }}>📅 {bookingResult.slot}</p>
+                <div style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 14, padding: '16px', marginBottom: 20 }}>
+                  <p style={{ fontSize: 11, color: '#3b82f6', fontWeight: 800, marginBottom: 8 }}>VIDEO CALL LINK</p>
+                  <a href={bookingResult.join_url} target="_blank" rel="noreferrer"
+                    style={{ color: '#93c5fd', fontSize: 13, fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                    {bookingResult.join_url}
+                  </a>
+                  <p style={{ fontSize: 11, color: '#475569', marginTop: 8 }}>Share this link with the patient via SMS/WhatsApp</p>
+                </div>
+                <button onClick={() => setShowTelemedicineModal(false)} style={{ width: '100%', padding: '14px', borderRadius: 14, background: 'linear-gradient(135deg,#059669,#10b981)', border: 'none', color: 'white', fontWeight: 800, cursor: 'pointer' }}>
+                  Done — Close
                 </button>
               </div>
             )}
@@ -803,6 +1034,7 @@ function HospitalContent() {
 
       <style>{`
         @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.3} }
+        @keyframes spin { from{transform:rotate(0deg)}to{transform:rotate(360deg)} }
         @keyframes slideDown { from{transform:translateY(-100%)}to{transform:translateY(0)} }
         @keyframes flashNew { 0%,100%{border-color:rgba(239,68,68,0.6)}50%{border-color:transparent} }
       `}</style>

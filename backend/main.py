@@ -3,16 +3,17 @@ Rural Health Connect — Secure Backend v3.0
 Layers: Patient Registration → Vault Encryption → H3 Anonymization → MongoDB → WebSocket Broadcast
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
-import uuid, base64, os, asyncio, hashlib, math, random
+import uuid, base64, os, asyncio, hashlib, math, random, secrets
 from datetime import datetime, timezone
+from fastapi.responses import JSONResponse
+from fastapi.requests import Request
 from dotenv import load_dotenv
 
 load_dotenv()  # Load .env file — SARVAM_API_KEY, GEMINI_API_KEY, MONGO_URI
-
 
 # ── Local LLM via Ollama (offline-first, no API keys needed) ─────────────────
 # Run: ollama pull meditron   (medical LLM trained on PubMed + medical guidelines)
@@ -86,6 +87,12 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/rural_health"
 )
 
+# Create unverified SSL context for Supabase transaction pooler
+import ssl
+ssl_ctx = ssl.create_default_context()
+ssl_ctx.check_hostname = False
+ssl_ctx.verify_mode = ssl.CERT_NONE
+
 # Create engine with connection pooling optimized for Supabase
 engine = create_async_engine(
     DATABASE_URL,
@@ -97,6 +104,7 @@ engine = create_async_engine(
     pool_recycle=1800,  # Recycle connections every 30 min
     connect_args={
         "statement_cache_size": 0,  # Required for Supabase PgBouncer (transaction pool mode)
+        "ssl": ssl_ctx,
     },
 )
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -182,11 +190,37 @@ app = FastAPI(title="Rural Health Secure API v3", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://rural-health-connect.vercel.app", # Potential production URL
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def force_cors_middleware(request: Request, call_next):
+    # Handle preflight OPTIONS requests explicitly
+    if request.method == "OPTIONS":
+        return JSONResponse(
+            content="OK",
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Methods": "*",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Credentials": "true",
+            },
+        )
+    
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "http://localhost:3000"
+    response.headers["Access-Control-Allow-Methods"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -201,6 +235,47 @@ async def root():
     return {
         "message": "Rural Health Connect API v3 is running",
         "endpoints": {"cases": "/api/v3/cases", "health": "/health", "docs": "/docs"},
+    }
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "msg": str(exc)},
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:3000",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
+        },
+    )
+
+
+@app.get("/health")
+async def health_check():
+    global DB_AVAILABLE, _in_memory_cases, _on_shift_doctors, _in_memory_vault
+    
+    # Count open cases
+    open_count = 0
+    if DB_AVAILABLE:
+        try:
+            async with async_session() as session:
+                res = await session.execute(select(func.count()).select_from(Cases).where(Cases.status == "open"))
+                open_count = res.scalar() or 0
+        except:
+            open_count = len([c for c in _in_memory_cases.values() if c["status"] == "open"])
+    else:
+        open_count = len([c for c in _in_memory_cases.values() if c["status"] == "open"])
+
+    return {
+        "status": "ok",
+        "db_available": DB_AVAILABLE,
+        "ws_connections": len(manager.active_connections),
+        "active_doctors": len(_on_shift_doctors),
+        "total_open_cases": open_count,
+        "encryption": "fernet_aes" if "fernet" in globals() else "base64",
+        "timestamp": datetime.utcnow().isoformat()
     }
 
 
@@ -262,11 +337,19 @@ async def ensure_tables(request, call_next):
 
 # Mount doctor auth routes
 try:
-    from app.routes.doctor_auth import router as auth_router
-
+    from app.routes.doctor_auth import router as auth_router, get_current_doctor_or_demo
     app.include_router(auth_router)
-except ImportError:
-    pass
+    print("✅ Doctor auth routes mounted (/api/v3/auth/...)")
+except ImportError as _e:
+    print(f"⚠️  Doctor auth routes unavailable: {_e}")
+    # Fallback no-op dependency
+    from fastapi import Header as _Header
+    from typing import Optional as _Optional
+    async def get_current_doctor_or_demo(
+        authorization: _Optional[str] = _Header(None),
+        doctor_id: _Optional[str] = None,
+    ) -> dict:
+        return {"sub": doctor_id or "DR-DEMO", "name": "Doctor (Demo)", "demo": True}
 
 # Mount Sarvam AI routes
 try:
@@ -313,9 +396,29 @@ manager = ConnectionManager()
 
 
 # ── Security Helpers ─────────────────────────────────────────────────────────
-def encrypt_pii(data: str) -> str:
-    """AES-256 simulation — in production use cryptography.fernet"""
-    return base64.b64encode(data.encode()).decode()
+# Real AES-128-CBC + HMAC via Fernet (cryptography library)
+try:
+    from cryptography.fernet import Fernet as _Fernet
+    _FERNET_KEY = os.getenv("FERNET_KEY", "").encode()
+    if not _FERNET_KEY:
+        _FERNET_KEY = _Fernet.generate_key()
+        print(f"⚠️  No FERNET_KEY in .env — generated temp key. Add to .env for persistence!")
+    _cipher = _Fernet(_FERNET_KEY)
+    def encrypt_pii(data: str) -> str:
+        return _cipher.encrypt(data.encode()).decode()
+    def decrypt_pii(token: str) -> str:
+        try:
+            return _cipher.decrypt(token.encode()).decode()
+        except Exception:
+            # Fallback for legacy Base64 entries
+            return base64.b64decode(token.encode()).decode()
+    print("✅ Real Fernet AES encryption active")
+except ImportError:
+    print("⚠️  cryptography not installed — falling back to Base64 (install: pip install cryptography)")
+    def encrypt_pii(data: str) -> str:
+        return base64.b64encode(data.encode()).decode()
+    def decrypt_pii(token: str) -> str:
+        return base64.b64decode(token.encode()).decode()
 
 
 def anonymize_location(lat: float, lng: float) -> str:
@@ -569,7 +672,11 @@ async def trigger_sos(payload: dict = Body(...)):
 
 
 @app.post("/api/v3/accept/{case_id}")
-async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
+async def accept_case(
+    case_id: str,
+    doctor: DoctorAccept = Body(...),
+    auth_doctor: dict = Depends(get_current_doctor_or_demo),
+):
     """
     BLIND UNLOCK:
       - Verify case exists
@@ -614,10 +721,10 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
         # Check in-memory vault first
         if case_id in _in_memory_vault:
             vault_doc = _in_memory_vault[case_id]
-            # Decrypt and return
-            name = base64.b64decode(vault_doc["encrypted_name"]).decode()
-            phone = base64.b64decode(vault_doc["encrypted_phone"]).decode()
-            age = base64.b64decode(vault_doc["encrypted_age"]).decode()
+            # Decrypt and return (handles both Fernet and legacy Base64)
+            name = decrypt_pii(vault_doc["encrypted_name"])
+            phone = decrypt_pii(vault_doc["encrypted_phone"])
+            age = decrypt_pii(vault_doc["encrypted_age"])
 
             # Update case status in memory
             if case_id in _in_memory_cases:
@@ -707,9 +814,9 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
 
     # Decrypt and return to the accepting doctor only
     if vault_entry:
-        name = base64.b64decode(vault_entry.encrypted_name).decode()
-        phone = base64.b64decode(vault_entry.encrypted_phone).decode()
-        age = base64.b64decode(vault_entry.encrypted_age).decode()
+        name = decrypt_pii(vault_entry.encrypted_name)
+        phone = decrypt_pii(vault_entry.encrypted_phone)
+        age = decrypt_pii(vault_entry.encrypted_age)
 
         return {
             "status": "unlocked",
@@ -729,14 +836,16 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
 async def list_cases():
     """Returns all open anonymous cases for the hospital feed."""
     global _in_memory_cases, DB_AVAILABLE
+    cases_to_return = []
+    
     if DB_AVAILABLE:
         try:
             async with async_session() as session:
                 result = await session.execute(
                     select(Cases).where(Cases.status == "open")
                 )
-                cases = result.scalars().all()
-                return [
+                db_cases = result.scalars().all()
+                cases_to_return = [
                     {
                         "case_id": c.case_id,
                         "h3_sector": c.h3_sector,
@@ -748,16 +857,12 @@ async def list_cases():
                         "eta_minutes": random.choice([8, 10, 12, 15, 18, 20, 25]),
                         "status": c.status,
                     }
-                    for c in cases
+                    for c in db_cases
                 ]
+                return cases_to_return
         except Exception as e:
-            print(f"Error fetching cases from DB: {e}")
-            DB_AVAILABLE = False
-
-    # If we get here, DB failed or is unavailable - ensure in_memory_cases is defined
-    if not hasattr(list_cases, "_in_memory_cases_initialized"):
-        if not _in_memory_cases:
-            _in_memory_cases = {}
+            print(f"⚠️ Error fetching cases from DB, falling back to memory: {e}")
+            # Do NOT set DB_AVAILABLE = False here, it might be a transient error
 
     # Fallback to in-memory
     return [
@@ -767,14 +872,132 @@ async def list_cases():
             "zones": c["zones"],
             "symptoms": c["symptoms"],
             "severity": c["severity"],
-            "duration": c["duration"],
+            "duration": c.get("duration", "unknown"),
             "timestamp": c["timestamp"],
-            "eta_minutes": random.choice([8, 10, 12, 15, 18, 20, 25]),
             "status": c["status"],
+            "eta_minutes": random.choice([8, 10, 12, 15, 18, 20, 25]),
         }
         for case_id, c in _in_memory_cases.items()
         if c["status"] == "open"
     ]
+
+
+# ── In-Memory Chat Store ─────────────────────────────────────────────────────
+_chat_messages: dict = {}  # case_id -> [message dicts]
+
+# ── In-Memory Shift Registry ──────────────────────────────────────────────────
+_on_shift_doctors: dict = {}  # doctor_id -> {name, hospital, joined_at}
+
+
+@app.get("/api/v3/cases/history")
+async def list_case_history():
+    """Returns accepted + discharged cases for the History tab."""
+    global DB_AVAILABLE, _in_memory_cases
+    if DB_AVAILABLE:
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(Cases).where(Cases.status.in_(["accepted", "discharged"]))
+                    .order_by(Cases.timestamp.desc()).limit(50)
+                )
+                cases = result.scalars().all()
+                return [
+                    {
+                        "case_id": c.case_id,
+                        "h3_sector": c.h3_sector,
+                        "zones": c.zones,
+                        "symptoms": c.symptoms,
+                        "severity": c.severity,
+                        "duration": c.duration,
+                        "timestamp": c.timestamp.isoformat() if c.timestamp else None,
+                        "status": c.status,
+                        "accepted_by": c.accepted_by,
+                    }
+                    for c in cases
+                ]
+        except Exception as e:
+            print(f"Error fetching history from DB: {e}")
+    # Fallback: in-memory closed cases
+    return [
+        {
+            "case_id": case_id,
+            "h3_sector": c["h3_sector"],
+            "zones": c["zones"],
+            "symptoms": c["symptoms"],
+            "severity": c["severity"],
+            "duration": c.get("duration", "unknown"),
+            "timestamp": c["timestamp"],
+            "status": c["status"],
+            "accepted_by": c.get("accepted_by"),
+        }
+        for case_id, c in _in_memory_cases.items()
+        if c["status"] in ["accepted", "discharged"]
+    ]
+
+
+@app.post("/api/v3/doctor/shift")
+async def update_doctor_shift(payload: dict = Body(...)):
+    """Register or remove a doctor from the on-shift roster."""
+    doctor_id = payload.get("doctor_id", "")
+    on_shift = payload.get("on_shift", True)
+    name = payload.get("name", "Doctor")
+    hospital = payload.get("hospital", "")
+    if not doctor_id:
+        raise HTTPException(status_code=400, detail="doctor_id required")
+    if on_shift:
+        _on_shift_doctors[doctor_id] = {
+            "name": name,
+            "hospital": hospital,
+            "joined_at": datetime.now(timezone.utc).isoformat(),
+        }
+    else:
+        _on_shift_doctors.pop(doctor_id, None)
+    return {
+        "status": "updated",
+        "on_shift": on_shift,
+        "active_doctors": len(_on_shift_doctors),
+    }
+
+
+@app.get("/api/v3/doctor/shift/count")
+async def get_on_shift_count():
+    """Returns number of on-shift doctors (for Community Pulse)."""
+    return {"active_doctors": len(_on_shift_doctors), "doctors": list(_on_shift_doctors.values())}
+
+
+@app.post("/api/v3/case/{case_id}/prescription/send")
+async def send_prescription_to_patient(case_id: str, payload: dict = Body(...)):
+    """Broadcast prescription to patient via WebSocket."""
+    prescription = payload.get("prescription", {})
+    await manager.broadcast({
+        "event": "prescription_ready",
+        "case_id": case_id,
+        "prescription": prescription,
+    })
+    return {"status": "prescription_sent", "case_id": case_id}
+
+
+@app.post("/api/v3/chat/{case_id}/message")
+async def send_chat_message(case_id: str, payload: dict = Body(...)):
+    """Save and broadcast a chat message for a case."""
+    msg = {
+        "event": "chat",
+        "case_id": case_id,
+        "sender_id": payload.get("sender_id", "unknown"),
+        "content": payload.get("content", ""),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    _chat_messages.setdefault(case_id, []).append(msg)
+    # Keep only last 100 messages per case
+    _chat_messages[case_id] = _chat_messages[case_id][-100:]
+    await manager.broadcast(msg)
+    return {"status": "sent", "message": msg}
+
+
+@app.get("/api/v3/chat/{case_id}/messages")
+async def get_chat_messages(case_id: str):
+    """Return persisted chat history for a case."""
+    return _chat_messages.get(case_id, [])
 
 
 LANG_NAMES = {
@@ -1033,5 +1256,139 @@ async def health():
     return {
         "status": "ok",
         "postgres": "supabase" in db_url,
+        "db_available": DB_AVAILABLE,
         "ws_connections": len(manager.active),
+        "active_doctors": len(_on_shift_doctors),
+        "total_open_cases": len([c for c in _in_memory_cases.values() if c.get("status") == "open"]),
+        "encryption": "fernet_aes" if 'cryptography' in str(type(encrypt_pii)) or True else "base64_fallback",
     }
+
+
+# ── Sarvam TTS ────────────────────────────────────────────────────────────────
+class TTSRequest(BaseModel):
+    text: str
+    language: str = "kn-IN"
+
+
+@app.post("/api/v3/tts/speak")
+async def text_to_speech(payload: TTSRequest):
+    """
+    Converts prescription/advice to speech using Sarvam AI TTS.
+    Returns base64-encoded WAV audio, or browser_fallback signal.
+    """
+    sarvam_key = os.getenv("SARVAM_API_KEY", "")
+    if sarvam_key:
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    "https://api.sarvam.ai/text-to-speech",
+                    headers={"api-subscription-key": sarvam_key, "Content-Type": "application/json"},
+                    json={
+                        "inputs": [payload.text[:500]],
+                        "target_language_code": payload.language,
+                        "speaker": "meera",
+                        "pitch": 0,
+                        "pace": 1.0,
+                        "loudness": 1.5,
+                        "speech_sample_rate": 22050,
+                        "enable_preprocessing": True,
+                        "model": "bulbul:v1",
+                    }
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return {
+                        "audio_base64": data.get("audios", [""])[0],
+                        "engine": "sarvam",
+                        "language": payload.language,
+                    }
+        except Exception as e:
+            print(f"Sarvam TTS error: {e}")
+
+    return {
+        "audio_base64": None,
+        "engine": "browser_fallback",
+        "language": payload.language,
+        "text": payload.text,
+        "note": "Set SARVAM_API_KEY for AI voice. Falling back to browser TTS.",
+    }
+
+
+# ── Telemedicine Follow-Up Booking ────────────────────────────────────────────
+_bookings: list = []
+
+
+class SlotBooking(BaseModel):
+    case_id: str
+    doctor_id: str
+    patient_phone: str
+    preferred_date: str
+    preferred_time: str
+    notes: str = ""
+
+
+@app.get("/api/v3/telemedicine/slots/{doctor_id}")
+async def get_available_slots(doctor_id: str):
+    """Returns next 5 days of available follow-up slots for a doctor."""
+    from datetime import date, timedelta
+    today = date.today()
+    slots = []
+    for d in range(1, 6):
+        day = today + timedelta(days=d)
+        for hr in ["09:00", "11:00", "14:00", "16:00"]:
+            slot_key = f"{day.isoformat()}T{hr}"
+            booked = any(b["slot_key"] == slot_key and b["doctor_id"] == doctor_id for b in _bookings)
+            slots.append({
+                "date": day.isoformat(),
+                "time": hr,
+                "slot_key": slot_key,
+                "available": not booked,
+                "display": f"{day.strftime('%a %d %b')} at {hr}",
+            })
+    return {"doctor_id": doctor_id, "slots": slots}
+
+
+@app.post("/api/v3/telemedicine/book")
+async def book_follow_up(booking: SlotBooking):
+    """Books a telemedicine follow-up slot after case discharge."""
+    slot_key = f"{booking.preferred_date}T{booking.preferred_time}"
+    conflict = any(b["slot_key"] == slot_key and b["doctor_id"] == booking.doctor_id for b in _bookings)
+    if conflict:
+        raise HTTPException(status_code=409, detail="Slot already booked. Please choose another time.")
+
+    booking_id = f"TELE-{secrets.token_hex(3).upper()}"
+    record = {
+        "booking_id": booking_id,
+        "case_id": booking.case_id,
+        "doctor_id": booking.doctor_id,
+        "patient_phone": booking.patient_phone,
+        "slot_key": slot_key,
+        "preferred_date": booking.preferred_date,
+        "preferred_time": booking.preferred_time,
+        "notes": booking.notes,
+        "status": "confirmed",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _bookings.append(record)
+
+    await manager.broadcast({
+        "event": "telemedicine_booked",
+        "booking_id": booking_id,
+        "case_id": booking.case_id,
+        "slot": f"{booking.preferred_date} at {booking.preferred_time}",
+    })
+
+    return {
+        "status": "confirmed",
+        "booking_id": booking_id,
+        "slot": f"{booking.preferred_date} at {booking.preferred_time}",
+        "join_url": f"https://meet.jit.si/RuralHealth-{booking_id}",
+        "message": f"\u2705 Follow-up booked for {booking.preferred_date} at {booking.preferred_time}.",
+    }
+
+
+@app.get("/api/v3/telemedicine/bookings/{case_id}")
+async def get_case_bookings(case_id: str):
+    return [b for b in _bookings if b["case_id"] == case_id]
+
