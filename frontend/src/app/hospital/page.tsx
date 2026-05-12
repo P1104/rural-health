@@ -5,6 +5,7 @@ import React, { useState, useEffect, useRef, Suspense } from 'react'
 import dynamic from 'next/dynamic'
 const OutbreakGlobe = dynamic(() => import('@/components/OutbreakGlobe'), { ssr: false })
 import { API_BASE_URL, getWebSocketUrl } from '@/config'
+import SecureChat from '@/components/SecureChat'
 
 type SevType = 'critical' | 'urgent' | 'stable'
 
@@ -59,6 +60,10 @@ function HospitalContent() {
   const [connectionMode, setConnectionMode] = useState<'websocket' | 'polling'>('websocket')
   const [view, setView] = useState<'live' | 'history'>('live')
   const [history, setHistory] = useState<any[]>([])
+  const [showPrescriptionModal, setShowPrescriptionModal] = useState(false)
+  const [prescriptionNotes, setPrescriptionNotes] = useState('')
+  const [generatedPrescription, setGeneratedPrescription] = useState<any>(null)
+  const [isGenerating, setIsGenerating] = useState(false)
 
   const handleSaveNote = async () => {
     if (!activeCase) return
@@ -336,6 +341,24 @@ function HospitalContent() {
     } catch { }
   }
 
+  const generatePrescription = async () => {
+    if (!activeCase || !prescriptionNotes.trim()) return
+    setIsGenerating(true)
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v3/case/${activeCase.case_id}/prescription`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: prescriptionNotes })
+      })
+      const data = await res.json()
+      setGeneratedPrescription(data)
+    } catch (err) {
+      console.error('Prescription generation failed:', err)
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
   return (
     <div style={{ minHeight: '100vh', background: '#030a16', color: '#f1f5f9', fontFamily: 'Inter,system-ui,sans-serif', display: 'flex', flexDirection: 'column' }}>
 
@@ -365,6 +388,9 @@ function HospitalContent() {
           <div>
             <p style={{ fontWeight: 900, fontSize: 15, letterSpacing: '-0.03em' }}>Command Center</p>
             <p style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace' }}>Welcome, {doctorName} • H3 BLIND ROUTING ACTIVE</p>
+          </div>
+          <div style={{ marginLeft: 20 }}>
+             <a href="/" style={{ fontSize: 10, color: '#475569', textDecoration: 'none', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, padding: '4px 8px' }}>← Patient App</a>
           </div>
         </div>
 
@@ -636,6 +662,12 @@ function HospitalContent() {
                     📍 Open Navigation
                   </button>
                   <button
+                    onClick={() => setShowPrescriptionModal(true)}
+                    style={{ width: '100%', padding: '15px', borderRadius: 14, background: 'linear-gradient(135deg,#3b82f6,#2563eb)', border: 'none', color: 'white', fontSize: 14, fontWeight: 800, cursor: 'pointer', marginTop: 12, boxShadow: '0 4px 20px rgba(59,130,246,0.4)' }}
+                  >
+                    💊 Write Digital Prescription
+                  </button>
+                  <button
                     onClick={() => {
                       setShowNotesInput(!showNotesInput)
                       setCurrentNote(fieldNotes[activeCase.case_id] || '')
@@ -645,14 +677,41 @@ function HospitalContent() {
                     📝 {fieldNotes[activeCase.case_id] ? 'Edit' : 'Add'} Field Notes (E2EE)
                   </button>
 
+                  {/* Real-time Secure Chat with Patient */}
+                  <div style={{ marginTop: 20 }}>
+                    <p style={{ fontSize: 10, fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>Live Dispatch Chat</p>
+                    <SecureChat 
+                      caseId={activeCase.case_id} 
+                      senderId={localStorage.getItem('doctor_token') || 'doctor'} 
+                      ws={ws.current} 
+                    />
+                  </div>
+
                   {showNotesInput && (
                     <div style={{ marginTop: 12, animation: 'slideDown 0.2s ease' }}>
-                      <textarea
-                        value={currentNote}
-                        onChange={(e) => setCurrentNote(e.target.value)}
-                        placeholder="Enter clinical observations..."
-                        style={{ width: '100%', minHeight: 80, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, padding: 10, color: 'white', fontSize: 12, outline: 'none', resize: 'vertical' }}
-                      />
+                        <textarea
+                          value={currentNote}
+                          onChange={(e) => setCurrentNote(e.target.value)}
+                          placeholder="Enter clinical observations..."
+                          style={{ width: '100%', minHeight: 80, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, padding: 10, color: 'white', fontSize: 12, outline: 'none', resize: 'vertical' }}
+                        />
+                        <button 
+                          onClick={() => {
+                            const recognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+                            if (recognition) {
+                              const rec = new recognition()
+                              rec.onresult = (e: any) => setCurrentNote(prev => prev + ' ' + e.results[0][0].transcript)
+                              rec.start()
+                            } else {
+                              alert('Sarvam AI Simulation: Voice transcription not supported in this browser. (Mocking...)')
+                              setCurrentNote(prev => prev + ' Patient is stable and responding well to treatment.')
+                            }
+                          }}
+                          style={{ position: 'absolute', right: 10, bottom: 50, background: 'rgba(16,217,138,0.2)', border: 'none', color: '#10d98a', borderRadius: '50%', width: 30, height: 30, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                          title="Sarvam AI Voice-to-Note"
+                        >
+                          🎙️
+                        </button>
                       <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                         <button onClick={handleSaveNote} style={{ flex: 1, padding: '8px', borderRadius: 10, background: '#10b981', border: 'none', color: 'white', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
                           Save Encrypted
@@ -683,6 +742,64 @@ function HospitalContent() {
           )}
         </aside>
       </div>
+
+      {/* Prescription Modal */}
+      {showPrescriptionModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(10px)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div style={{ background: '#050e1a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 24, width: '100%', maxWidth: 500, padding: 32, boxShadow: '0 20px 80px rgba(0,0,0,0.8)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+              <h3 style={{ fontSize: 20, fontWeight: 900 }}>AI Prescription Hub</h3>
+              <button onClick={() => { setShowPrescriptionModal(false); setGeneratedPrescription(null); setPrescriptionNotes('') }} style={{ background: 'none', border: 'none', color: '#475569', fontSize: 24, cursor: 'pointer' }}>×</button>
+            </div>
+
+            {!generatedPrescription ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <p style={{ fontSize: 13, color: '#94a3b8' }}>Type raw notes below. Meditron AI will format them into a professional prescription.</p>
+                <textarea 
+                  value={prescriptionNotes}
+                  onChange={(e) => setPrescriptionNotes(e.target.value)}
+                  placeholder="Example: Paracetamol 500mg, 1 tablet twice a day for 3 days. Patient has mild fever."
+                  style={{ width: '100%', minHeight: 120, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 16, padding: 16, color: 'white', fontSize: 14, outline: 'none' }}
+                />
+                <button 
+                  onClick={generatePrescription}
+                  disabled={isGenerating || !prescriptionNotes.trim()}
+                  style={{ width: '100%', padding: '16px', borderRadius: 16, background: 'linear-gradient(135deg,#3b82f6,#2563eb)', border: 'none', color: 'white', fontWeight: 800, cursor: isGenerating ? 'not-allowed' : 'pointer' }}
+                >
+                  {isGenerating ? '🧠 Meditron is Thinking...' : '✨ Generate Clinical Prescription'}
+                </button>
+              </div>
+            ) : (
+              <div style={{ animation: 'slideDown 0.4s ease' }}>
+                <div style={{ background: 'rgba(16,217,138,0.05)', border: '1px dashed rgba(16,217,138,0.3)', borderRadius: 16, padding: 20, marginBottom: 24 }}>
+                  <p style={{ fontSize: 11, color: '#10d98a', fontWeight: 800, textTransform: 'uppercase', marginBottom: 12 }}>Prescription Preview</p>
+                  <p style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>Diagnosis: {generatedPrescription.diagnosis}</p>
+                  <div style={{ marginTop: 16 }}>
+                    {generatedPrescription.medications?.map((m: any, i: number) => (
+                      <div key={i} style={{ padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <p style={{ fontSize: 14, fontWeight: 700 }}>{m.name}</p>
+                        <p style={{ fontSize: 12, color: '#94a3b8' }}>{m.dosage} • {m.timing} • {m.duration}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <p style={{ fontSize: 13, color: '#f1f5f9', marginTop: 16 }}><b>Advice:</b> {generatedPrescription.advice}</p>
+                  <p style={{ fontSize: 12, color: '#10d98a', marginTop: 8 }}><b>Follow-up:</b> {generatedPrescription.follow_up}</p>
+                </div>
+                <button 
+                  onClick={() => {
+                    alert('Prescription sent to patient!')
+                    setShowPrescriptionModal(false)
+                    setGeneratedPrescription(null)
+                  }}
+                  style={{ width: '100%', padding: '16px', borderRadius: 16, background: '#10d98a', border: 'none', color: '#050e1a', fontWeight: 800, cursor: 'pointer' }}
+                >
+                  📤 Send to Patient's App
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.3} }

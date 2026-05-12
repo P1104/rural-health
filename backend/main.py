@@ -79,6 +79,7 @@ from sqlalchemy.sql import func
 
 # Force IPv4 for Supabase connections (Render IPv6 issues)
 import socket
+
 socket.setdefaulttimeout(30)
 
 DATABASE_URL = os.getenv(
@@ -129,6 +130,23 @@ class Cases(Base):
     accepted_by = Column(String, nullable=True)
 
 
+class Doctor(Base):
+    __tablename__ = "doctors"
+    doctor_id = Column(String, primary_key=True)
+    name = Column(String)
+    email = Column(String, unique=True)
+    password_hash = Column(String)
+    hospital = Column(String)
+    specialization = Column(String)
+    license_number = Column(String, unique=True)
+    license_type = Column(String, default="MBBS")
+    phone = Column(String)
+    verified = Column(Boolean, default=False)
+    license_doc_url = Column(Text, nullable=True)
+    trust_score = Column(Float, default=0.0)
+    joined = Column(DateTime, default=func.now())
+
+
 async def init_db():
     try:
         async with engine.begin() as conn:
@@ -144,6 +162,7 @@ async def init_db():
 _in_memory_vault: dict = {}
 _in_memory_cases: dict = {}
 
+
 async def test_db_connection():
     """Test if database connection works"""
     try:
@@ -153,6 +172,7 @@ async def test_db_connection():
     except Exception as e:
         print(f"Database connection test failed: {e}")
         return False
+
 
 DB_AVAILABLE = False  # Will be set to True if connection works
 print("PostgreSQL configured - testing connection...")
@@ -168,9 +188,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     from fastapi import Response
+
     return Response(status_code=204)
 
 
@@ -178,12 +200,9 @@ async def favicon():
 async def root():
     return {
         "message": "Rural Health Connect API v3 is running",
-        "endpoints": {
-            "cases": "/api/v3/cases",
-            "health": "/health",
-            "docs": "/docs"
-        }
+        "endpoints": {"cases": "/api/v3/cases", "health": "/health", "docs": "/docs"},
     }
+
 
 @app.get("/api/v3/db/init")
 async def setup_db():
@@ -221,7 +240,7 @@ async def ensure_tables(request, call_next):
     # Skip if already initialized or if we know DB is unavailable
     if hasattr(ensure_tables, "_initialized"):
         return await call_next(request)
-    
+
     # Mark as initialized immediately to prevent retries on concurrent requests
     ensure_tables._initialized = True
 
@@ -239,6 +258,7 @@ async def ensure_tables(request, call_next):
         DB_AVAILABLE = False
 
     return await call_next(request)
+
 
 # Mount doctor auth routes
 try:
@@ -435,7 +455,7 @@ async def submit_case(payload: CaseSubmission):
             print(f"❌ PostgreSQL INSERT ERROR for case {case_id}: {str(e)}")
             # Fall back to in-memory
             DB_AVAILABLE = False
-    
+
     # Fallback to in-memory storage
     if not saved_to_db:
         _in_memory_vault[case_id] = vault_doc
@@ -454,7 +474,12 @@ async def submit_case(payload: CaseSubmission):
     }
     await manager.broadcast(broadcast_payload)
 
-    return {"status": "broadcasted", "case_id": case_id, "h3_sector": h3_sector, "storage": "database" if saved_to_db else "memory"}
+    return {
+        "status": "broadcasted",
+        "case_id": case_id,
+        "h3_sector": h3_sector,
+        "storage": "database" if saved_to_db else "memory",
+    }
 
 
 @app.post("/api/v3/sos")
@@ -494,7 +519,7 @@ async def trigger_sos(payload: dict = Body(...)):
                     encrypted_name=encrypt_pii(patient_name),
                     encrypted_phone=encrypt_pii(patient_phone),
                     encrypted_age=encrypt_pii(patient_age),
-                    exact_location=location,   # ← real GPS coords from frontend
+                    exact_location=location,  # ← real GPS coords from frontend
                     timestamp=datetime.utcnow(),
                     accessed_by=None,
                     status="open",
@@ -513,7 +538,7 @@ async def trigger_sos(payload: dict = Body(...)):
         "encrypted_name": encrypt_pii(patient_name),
         "encrypted_phone": encrypt_pii(patient_phone),
         "encrypted_age": encrypt_pii(patient_age),
-        "exact_location": location,   # ← real GPS coords
+        "exact_location": location,  # ← real GPS coords
         "timestamp": ts,
         "accessed_by": None,
         "accessed_at": None,
@@ -574,7 +599,9 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
 
                     # Update vault accessed info
                     vault_entry.accessed_by = doctor.doctor_id
-                    vault_entry.accessed_at = datetime.utcnow()  # naive UTC — matches TIMESTAMP WITHOUT TIME ZONE
+                    vault_entry.accessed_at = (
+                        datetime.utcnow()
+                    )  # naive UTC — matches TIMESTAMP WITHOUT TIME ZONE
                     await session.commit()
         except Exception as e:
             print(f"PostgreSQL error in accept_case: {e}")
@@ -583,7 +610,7 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
     # If vault not found in PostgreSQL, check in-memory storage
     if not vault_entry:
         global _in_memory_vault, _in_memory_cases
-        
+
         # Check in-memory vault first
         if case_id in _in_memory_vault:
             vault_doc = _in_memory_vault[case_id]
@@ -591,34 +618,37 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
             name = base64.b64decode(vault_doc["encrypted_name"]).decode()
             phone = base64.b64decode(vault_doc["encrypted_phone"]).decode()
             age = base64.b64decode(vault_doc["encrypted_age"]).decode()
-            
+
             # Update case status in memory
             if case_id in _in_memory_cases:
                 _in_memory_cases[case_id]["status"] = "accepted"
-            
+
             # Broadcast to other hospitals to remove from feed
             try:
-                await manager.broadcast({
-                    "event": "case_accepted",
-                    "case_id": case_id,
-                    "accepted_by": doctor.hospital,
-                    "doctor_profile": {
-                        "name": doctor.doctor_name,
-                        "designation": doctor.designation or "MBBS, General Physician",
-                        "hospital": doctor.hospital,
-                        "cases_handled": doctor.cases_handled or 0,
-                        "eta_minutes": 15,
-                    },
-                })
+                await manager.broadcast(
+                    {
+                        "event": "case_accepted",
+                        "case_id": case_id,
+                        "accepted_by": doctor.hospital,
+                        "doctor_profile": {
+                            "name": doctor.doctor_name,
+                            "designation": doctor.designation
+                            or "MBBS, General Physician",
+                            "hospital": doctor.hospital,
+                            "cases_handled": doctor.cases_handled or 0,
+                            "eta_minutes": 15,
+                        },
+                    }
+                )
             except Exception:
                 pass
-            
+
             return {
                 "status": "unlocked",
                 "patient": {"name": name, "age": age, "phone": phone},
                 "location": vault_doc["exact_location"],
             }
-        
+
         # Check if it's an SOS case from cases table (DB only)
         if DB_AVAILABLE:
             try:
@@ -667,6 +697,8 @@ async def accept_case(case_id: str, doctor: DoctorAccept = Body(...)):
                     "hospital": doctor.hospital,
                     "cases_handled": doctor.cases_handled or 0,
                     "eta_minutes": 15,
+                    "verified": True, # For demo, we assume accepted doctors are verified
+                    "trust_score": 98,
                 },
             }
         )
@@ -713,9 +745,7 @@ async def list_cases():
                         "severity": c.severity,
                         "duration": c.duration,
                         "timestamp": c.timestamp.isoformat() if c.timestamp else None,
-                        "eta_minutes": random.choice(
-                            [8, 10, 12, 15, 18, 20, 25]
-                        ),
+                        "eta_minutes": random.choice([8, 10, 12, 15, 18, 20, 25]),
                         "status": c.status,
                     }
                     for c in cases
@@ -723,12 +753,12 @@ async def list_cases():
         except Exception as e:
             print(f"Error fetching cases from DB: {e}")
             DB_AVAILABLE = False
-            
+
     # If we get here, DB failed or is unavailable - ensure in_memory_cases is defined
     if not hasattr(list_cases, "_in_memory_cases_initialized"):
         if not _in_memory_cases:
             _in_memory_cases = {}
-    
+
     # Fallback to in-memory
     return [
         {

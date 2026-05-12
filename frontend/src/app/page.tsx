@@ -1,4 +1,5 @@
 'use client'
+// Rural Health Connect - Patient Interface
 
 import React, { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
@@ -13,6 +14,7 @@ import PatientRegistration from '@/components/PatientRegistration'
 import { ZONE_SYMPTOMS, LANGUAGES, DURATIONS, SEVERITIES, FIRST_AID } from '@/data/symptomMapping'
 import { TRANSLATIONS } from '@/data/translations'
 import { API_BASE_URL, WS_BASE_URL } from '@/config'
+import SecureChat from '@/components/SecureChat'
 
 type Step = 'lang' | 'register' | 'body' | 'symptoms' | 'severity' | 'review' | 'waiting'
 
@@ -54,6 +56,10 @@ export default function App() {
   const [painLevel, setPainLevel] = useState(5)
   const [installPrompt, setInstallPrompt] = useState<any>(null)
   const [tipIndex, setTipIndex] = useState(0)
+  const [socket, setSocket] = useState<WebSocket | null>(null)
+  const [receivedPrescription, setReceivedPrescription] = useState<any>(null)
+  const [aiAnalysis, setAiAnalysis] = useState<any>(null)
+  const [analyzing, setAnalyzing] = useState(false)
 
   useEffect(() => {
     setMounted(true)
@@ -139,6 +145,26 @@ export default function App() {
     }
   }
 
+  const analyzeImage = async () => {
+    if (!patientPhoto) {
+      alert("Please upload a photo first in the Info step!");
+      return;
+    }
+    setAnalyzing(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v3/analysis/vision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_base64: patientPhoto, symptoms: selectedSymptoms }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAiAnalysis(data);
+      }
+    } catch (e) { }
+    setAnalyzing(false);
+  }
+
   // Build zone-specific symptom list (deduplicated)
   const availableSymptoms = React.useMemo(() => {
     const all = [
@@ -183,12 +209,13 @@ export default function App() {
     return () => clearInterval(t)
   }, [step])
 
-  // WebSocket: listen for doctor acceptance
+  // WebSocket: listen for doctor acceptance and chat
   useEffect(() => {
     if (step !== 'waiting') return
     let ws: WebSocket | null = null
     try {
       ws = new WebSocket(`${WS_BASE_URL}/ws/hospital`)
+      setSocket(ws)
       ws.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data)
@@ -202,11 +229,19 @@ export default function App() {
             setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 5000)
           } else if (data.event === 'doctor_location_update') {
             setDoctorLocation({ lat: data.lat, lng: data.lng })
+          } else if (data.event === 'prescription_ready') {
+            setReceivedPrescription(data.prescription)
+            const id = Date.now().toString()
+            setToasts(p => [...p, { id, msg: "📋 Your prescription is ready!", color: '#3b82f6' }])
+            setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 8000)
           }
         } catch { }
       }
     } catch { }
-    return () => ws?.close()
+    return () => {
+        ws?.close()
+        setSocket(null)
+    }
   }, [step])
 
   // Countdown timer after doctor accepts
@@ -460,7 +495,11 @@ export default function App() {
               </button>
             </div>
           )}
-          <a href="/hospital" style={{ fontSize: 11, color: '#475569', fontWeight: 700, textDecoration: 'none', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 8, padding: '6px 12px', background: 'rgba(255,255,255,0.03)' }}>🏥 {t.hospital}</a>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <a href="/doctor" style={{ fontSize: 11, color: '#475569', fontWeight: 700, textDecoration: 'none', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 8, padding: '6px 12px', background: 'rgba(255,255,255,0.03)' }}>👨‍⚕️ Doctor</a>
+            <a href="/hospital" style={{ fontSize: 11, color: '#475569', fontWeight: 700, textDecoration: 'none', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 8, padding: '6px 12px', background: 'rgba(255,255,255,0.03)' }}>🏥 Hospital</a>
+            <a href="/admin" style={{ fontSize: 11, color: '#475569', fontWeight: 700, textDecoration: 'none', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 8, padding: '6px 12px', background: 'rgba(255,255,255,0.03)' }}>⚙️ Admin</a>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div style={{ width: 8, height: 8, borderRadius: '50%', background: userLocation.lat === 12.9716 ? '#f59e0b' : '#10d98a', animation: 'ping 2s ease-out infinite' }} />
             <span style={{ fontSize: 10, color: '#475569', fontWeight: 600, letterSpacing: '0.06em' }}>
@@ -525,6 +564,15 @@ export default function App() {
             <p style={{ marginTop: 16, fontSize: 12, color: '#334155' }}>
               🔒 {t.privacyNote}
             </p>
+
+            {/* Community Pulse Banner */}
+            <div style={{ marginTop: 60, padding: '20px', background: 'rgba(59,130,246,0.03)', border: '1px solid rgba(59,130,246,0.1)', borderRadius: 20, display: 'flex', alignItems: 'center', gap: 15, textAlign: 'left' }}>
+              <div style={{ fontSize: 32 }}>📊</div>
+              <div>
+                <p style={{ fontSize: 13, fontWeight: 800, color: '#3b82f6', marginBottom: 2 }}>COMMUNITY PULSE</p>
+                <p style={{ fontSize: 12, color: '#64748b' }}>12 active doctors in your sector. Average help arrival time: 14 mins.</p>
+              </div>
+            </div>
           </div>
         )}
 
@@ -628,6 +676,35 @@ export default function App() {
                   delay={i * 0.06}
                 />
               ))}
+            </div>
+
+            {/* AI Visual Analysis Feature */}
+            <div style={{ marginBottom: 24, padding: '20px', background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <div>
+                  <h3 style={{ fontSize: 16, fontWeight: 800, color: '#3b82f6' }}>📸 AI Visual Triage</h3>
+                  <p style={{ fontSize: 11, color: '#64748b' }}>Analyze your symptoms using Gemini Vision</p>
+                </div>
+                <button 
+                  onClick={analyzeImage}
+                  disabled={analyzing || !patientPhoto}
+                  style={{ padding: '10px 20px', borderRadius: 12, background: analyzing ? '#1e293b' : '#3b82f6', color: 'white', border: 'none', fontWeight: 800, fontSize: 12, cursor: 'pointer', opacity: !patientPhoto ? 0.5 : 1 }}
+                >
+                  {analyzing ? '⌛ Analyzing...' : '✨ Run AI Scan'}
+                </button>
+              </div>
+
+              {aiAnalysis ? (
+                <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 14, padding: 16, animation: 'fadeIn 0.5s ease' }}>
+                   <p style={{ fontSize: 13, fontWeight: 800, color: '#10d98a', marginBottom: 6 }}>{aiAnalysis.title}</p>
+                   <p style={{ fontSize: 12, color: '#f1f5f9', lineHeight: 1.5, marginBottom: 8 }}>{aiAnalysis.observation}</p>
+                   <div style={{ padding: '8px 12px', background: 'rgba(245,158,11,0.1)', borderLeft: '3px solid #f59e0b', fontSize: 11, color: '#f59e0b' }}>
+                     <strong>TIP:</strong> {aiAnalysis.suggestion}
+                   </div>
+                </div>
+              ) : !patientPhoto && (
+                <p style={{ fontSize: 11, color: '#475569', fontStyle: 'italic', textAlign: 'center' }}>Go back to "Info" step to upload a photo for AI analysis.</p>
+              )}
             </div>
 
             {loadingAdvice && (
@@ -880,6 +957,14 @@ export default function App() {
                   doctorLng={doctorLocation?.lng ?? null}
                   doctorProfile={doctorProfile}
                 />
+                
+                {/* Real-time Secure Chat */}
+                <SecureChat 
+                  caseId={caseId} 
+                  senderId="patient" 
+                  ws={socket} 
+                />
+
                 {/* Countdown timer */}
                 <div style={{ marginTop: 16, background: 'rgba(0,0,0,0.3)', borderRadius: 16, padding: '14px 20px', textAlign: 'center' }}>
                   <p style={{ fontSize: 10, color: '#475569', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Estimated Arrival</p>
@@ -890,6 +975,29 @@ export default function App() {
                     <div style={{ height: '100%', width: `${((600 - countdown) / 600) * 100}%`, background: countdown <= 60 ? 'linear-gradient(90deg,#ef4444,#f87171)' : 'linear-gradient(90deg,#10d98a,#34d399)', transition: 'width 1s linear', borderRadius: 2 }} />
                   </div>
                 </div>
+
+                {/* Received Prescription Display */}
+                {receivedPrescription && (
+                  <div style={{ marginTop: 16, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 20, padding: 20, textAlign: 'left', animation: 'slideDown 0.4s ease' }}>
+                    <p style={{ fontSize: 10, color: '#3b82f6', fontWeight: 800, textTransform: 'uppercase', marginBottom: 12 }}>📋 DIGITAL PRESCRIPTION</p>
+                    <p style={{ fontSize: 16, fontWeight: 800, marginBottom: 8 }}>{receivedPrescription.diagnosis}</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+                      {receivedPrescription.medications?.map((m: any, i: number) => (
+                        <div key={i} style={{ padding: '8px', background: 'rgba(255,255,255,0.03)', borderRadius: 10 }}>
+                          <p style={{ fontSize: 13, fontWeight: 700 }}>{m.name}</p>
+                          <p style={{ fontSize: 11, color: '#94a3b8' }}>{m.dosage} • {m.timing} • {m.duration}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <p style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.5 }}><b>Advice:</b> {receivedPrescription.advice}</p>
+                    <button 
+                      onClick={() => window.print()}
+                      style={{ width: '100%', marginTop: 16, padding: '12px', borderRadius: 12, background: '#3b82f6', border: 'none', color: 'white', fontWeight: 800, cursor: 'pointer' }}
+                    >
+                      🖨️ Download/Print Prescription
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

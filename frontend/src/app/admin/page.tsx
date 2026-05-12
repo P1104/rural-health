@@ -9,6 +9,7 @@ interface Doctor {
   hospital: string
   specialization: string
   license_number: string
+  license_doc_url: string
   phone: string
   verified: boolean
   joined: string
@@ -58,23 +59,23 @@ export default function AdminDashboard() {
         <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', padding: 40, borderRadius: 24, width: '100%', maxWidth: 400, textAlign: 'center' }}>
           <h1 style={{ fontSize: 24, fontWeight: 900, marginBottom: 8 }}>Admin Portal</h1>
           <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: 32 }}>Enter authority key to manage medical licenses</p>
-          
-          <input 
-            type="password" 
-            placeholder="Authority Admin Key" 
+
+          <input
+            type="password"
+            placeholder="Authority Admin Key"
             value={adminKey}
             onChange={(e) => setAdminKey(e.target.value)}
             style={{ width: '100%', padding: '14px 18px', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, color: 'white', marginBottom: 16, outline: 'none' }}
           />
-          
-          <button 
+
+          <button
             onClick={fetchPending}
             disabled={loading}
             style={{ width: '100%', padding: '14px', background: 'linear-gradient(135deg,#059669,#10b981)', border: 'none', color: 'white', fontWeight: 800, borderRadius: 12, cursor: 'pointer' }}
           >
             {loading ? 'Authenticating...' : 'Access Dashboard'}
           </button>
-          
+
           {error && <p style={{ color: '#ef4444', fontSize: 12, marginTop: 16 }}>{error}</p>}
         </div>
       </div>
@@ -88,7 +89,7 @@ export default function AdminDashboard() {
           <h1 style={{ fontSize: 28, fontWeight: 900 }}>Doctor Verification</h1>
           <p style={{ color: '#94a3b8', fontSize: 14 }}>Review and approve medical licenses for Rural Health Connect</p>
         </div>
-        <button 
+        <button
           onClick={() => setIsAuthorized(false)}
           style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#94a3b8', borderRadius: 8, cursor: 'pointer', fontSize: 12 }}
         >
@@ -98,10 +99,26 @@ export default function AdminDashboard() {
 
       <main style={{ maxWidth: 1000, margin: '0 auto' }}>
         {message && (
-          <div style={{ background: 'rgba(16,217,138,0.1)', border: '1px solid #10d98a', color: '#10d98a', padding: '12px 20px', borderRadius: 12, marginBottom: 24, fontSize: 14 }}>
+          <div style={{ padding: '12px 16px', borderRadius: 12, background: 'rgba(16,217,138,0.08)', border: '1px solid rgba(16,217,138,0.2)', color: '#10d98a', marginBottom: 24, fontSize: 14 }}>
             {message}
           </div>
         )}
+
+        {/* Stats Grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20, marginBottom: 32 }}>
+          <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: 24, borderRadius: 20 }}>
+            <p style={{ fontSize: 11, color: '#475569', fontWeight: 800, textTransform: 'uppercase', marginBottom: 8 }}>Pending Verification</p>
+            <p style={{ fontSize: 32, fontWeight: 900, color: '#f59e0b' }}>{pendingDocs.length}</p>
+          </div>
+          <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: 24, borderRadius: 20 }}>
+            <p style={{ fontSize: 11, color: '#475569', fontWeight: 800, textTransform: 'uppercase', marginBottom: 8 }}>System Health</p>
+            <p style={{ fontSize: 32, fontWeight: 900, color: '#10d98a' }}>Optimal</p>
+          </div>
+          <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: 24, borderRadius: 20 }}>
+            <p style={{ fontSize: 11, color: '#475569', fontWeight: 800, textTransform: 'uppercase', marginBottom: 8 }}>Network Status</p>
+            <p style={{ fontSize: 32, fontWeight: 900, color: '#3b82f6' }}>Active</p>
+          </div>
+        </div>
 
         <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 20, overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
@@ -128,18 +145,23 @@ export default function AdminDashboard() {
                     <p style={{ fontSize: 12, color: '#64748b' }}>{doc.email}</p>
                   </td>
                   <td style={{ padding: '20px 24px' }}>
-                    <p style={{ fontFamily: 'monospace', color: '#10d98a', fontSize: 13, fontWeight: 700 }}>{doc.license_number}</p>
-                    <p style={{ fontSize: 11, color: '#475569' }}>{doc.specialization}</p>
+                    <p style={{ fontFamily: 'monospace', color: '#10d98a', fontSize: 13, fontWeight: 700, marginBottom: 4 }}>{doc.license_number}</p>
+                    {doc.license_doc_url ? (
+                      <a href={doc.license_doc_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: '#3b82f6', textDecoration: 'none', borderBottom: '1px solid #3b82f6' }}>View Document 📄</a>
+                    ) : (
+                      <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>No doc uploaded</span>
+                    )}
                   </td>
                   <td style={{ padding: '20px 24px' }}>
-                    <p style={{ fontSize: 14 }}>{doc.hospital}</p>
+                    <p style={{ fontSize: 14, fontWeight: 600 }}>{doc.hospital}</p>
+                    <p style={{ fontSize: 11, color: '#64748b' }}>{doc.specialization}</p>
                   </td>
                   <td style={{ padding: '20px 24px' }}>
-                    <button 
+                    <button
                       onClick={() => verifyDoctor(doc.email)}
-                      style={{ padding: '8px 16px', background: '#10b981', border: 'none', color: 'white', fontWeight: 700, borderRadius: 8, cursor: 'pointer', fontSize: 12 }}
+                      style={{ padding: '8px 16px', background: 'linear-gradient(135deg,#059669,#10b981)', border: 'none', color: 'white', fontWeight: 800, borderRadius: 8, cursor: 'pointer', fontSize: 11, boxShadow: '0 4px 12px rgba(5,150,105,0.3)' }}
                     >
-                      Approve License
+                      Approve & Verify
                     </button>
                   </td>
                 </tr>

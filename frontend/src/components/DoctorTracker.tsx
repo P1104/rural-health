@@ -8,6 +8,8 @@ export interface DoctorProfile {
   cases_handled: number
   eta_minutes: number
   photo_url?: string
+  verified?: boolean
+  trust_score?: number
 }
 
 interface Props {
@@ -48,42 +50,82 @@ export default function DoctorTracker({ patientLat, patientLng, doctorLat, docto
   return (
     <div style={{ width: '100%' }}>
 
-      {/* ── Doctor Profile Card ── */}
+      {/* ── Doctor Info Bottom Sheet (Uber-style) ── */}
       {doctorProfile && (
         <div style={{
-          background: 'linear-gradient(135deg, rgba(59,130,246,0.08), rgba(16,217,138,0.05))',
-          border: '1px solid rgba(59,130,246,0.3)',
-          borderRadius: 20, padding: '20px 22px', marginBottom: 16,
-          display: 'flex', gap: 18, alignItems: 'center',
-          animation: 'slideDown 0.4s ease',
+          background: 'rgba(5, 14, 26, 0.95)',
+          backdropFilter: 'blur(10px)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          borderRadius: '24px 24px 20px 20px',
+          padding: '24px',
+          marginBottom: 16,
+          boxShadow: '0 10px 40px rgba(0,0,0,0.5)',
+          animation: 'slideUp 0.5s ease-out',
         }}>
-          {/* Avatar */}
-          <div style={{
-            width: 62, height: 62, borderRadius: '50%', flexShrink: 0,
-            background: 'linear-gradient(135deg,#3b82f6,#10b981)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 28, boxShadow: '0 0 20px rgba(59,130,246,0.4)',
-          }}>👨‍⚕️</div>
+          <div style={{ display: 'flex', gap: 20, alignItems: 'center', marginBottom: 20 }}>
+            {/* Avatar with Ring */}
+            <div style={{ position: 'relative' }}>
+              <div style={{
+                width: 70, height: 70, borderRadius: '50%',
+                background: `url(${doctorProfile.photo_url || 'https://img.freepik.com/free-vector/doctor-character-background_1270-84.jpg'}) center/cover`,
+                border: '3px solid #3b82f6',
+                boxShadow: '0 0 20px rgba(59,130,246,0.3)',
+              }} />
+              <div style={{
+                position: 'absolute', bottom: 0, right: 0,
+                width: 24, height: 24, borderRadius: '50%',
+                background: '#10b981', border: '3px solid #050e1a',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 12, color: 'white'
+              }}>✓</div>
+            </div>
 
-          {/* Info */}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <p style={{ fontSize: 9, color: '#3b82f6', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 3 }}>
-              ✅ Doctor Assigned &amp; En Route
-            </p>
-            <p style={{ fontSize: 17, fontWeight: 900, marginBottom: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              Dr. {doctorProfile.name}
-            </p>
-            <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>{doctorProfile.designation}</p>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11, color: '#64748b' }}>🏥 {doctorProfile.hospital}</span>
-              <span style={{ fontSize: 11, color: '#10d98a', fontWeight: 700 }}>📋 {doctorProfile.cases_handled} cases</span>
+            {/* Info */}
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <h3 style={{ fontSize: 20, fontWeight: 900, color: 'white', margin: 0 }}>Dr. {doctorProfile.name}</h3>
+                <span style={{ 
+                  background: 'rgba(16,185,129,0.1)', color: '#10b981', 
+                  fontSize: 10, fontWeight: 900, padding: '3px 8px', borderRadius: 20,
+                  border: '1px solid rgba(16,185,129,0.3)', letterSpacing: '0.05em'
+                }}>VERIFIED</span>
+              </div>
+              <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 8px 0' }}>{doctorProfile.designation}</p>
+              <div style={{ display: 'flex', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ fontSize: 13 }}>⭐</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b' }}>4.9</span>
+                </div>
+                <div style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.1)', alignSelf: 'center' }} />
+                <span style={{ fontSize: 12, color: '#64748b' }}>{doctorProfile.cases_handled}+ Cases</span>
+              </div>
+            </div>
+
+            {/* ETA Bubble */}
+            <div style={{ 
+              background: 'linear-gradient(135deg, #f59e0b, #d97706)', 
+              borderRadius: 18, padding: '12px 16px', textAlign: 'center',
+              boxShadow: '0 4px 15px rgba(245,158,11,0.3)'
+            }}>
+              <span style={{ display: 'block', fontSize: 24, fontWeight: 900, color: 'white', lineHeight: 1 }}>{doctorProfile.eta_minutes}</span>
+              <span style={{ fontSize: 9, fontWeight: 800, color: 'rgba(255,255,255,0.8)' }}>MIN</span>
             </div>
           </div>
 
-          {/* ETA */}
-          <div style={{ textAlign: 'center', flexShrink: 0 }}>
-            <p style={{ fontSize: 30, fontWeight: 900, color: '#f59e0b', lineHeight: 1 }}>{doctorProfile.eta_minutes}</p>
-            <p style={{ fontSize: 9, color: '#64748b', fontWeight: 800, textTransform: 'uppercase' }}>MIN ETA</p>
+          <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '0 -24px 20px -24px' }} />
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(59,130,246,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>🏥</div>
+              <span style={{ fontSize: 13, color: '#cbd5e1', fontWeight: 600 }}>{doctorProfile.hospital}</span>
+            </div>
+            <button style={{ 
+              background: '#3b82f6', color: 'white', border: 'none', 
+              padding: '10px 20px', borderRadius: 12, fontWeight: 800, fontSize: 13,
+              cursor: 'pointer', boxShadow: '0 4px 15px rgba(59,130,246,0.4)'
+            }}>
+              📞 Call Doctor
+            </button>
           </div>
         </div>
       )}
@@ -108,38 +150,51 @@ export default function DoctorTracker({ patientLat, patientLng, doctorLat, docto
         )}
 
         <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ position: 'absolute', inset: 0 }}>
-          {/* Grid */}
-          {[20, 40, 60, 80].map(v => (
-            <React.Fragment key={v}>
-              <line x1={v} y1={0} x2={v} y2={100} stroke="rgba(16,217,138,0.05)" strokeWidth="0.3" />
-              <line x1={0} y1={v} x2={100} y2={v} stroke="rgba(16,217,138,0.05)" strokeWidth="0.3" />
-            </React.Fragment>
-          ))}
+          <defs>
+            <pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse">
+              <path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="0.5"/>
+            </pattern>
+            <radialGradient id="patientGlow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#10b981" stopOpacity="0.4" />
+              <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+          
+          {/* Map Background Pattern */}
+          <rect width="100" height="100" fill="url(#grid)" />
+          
+          {/* Major "Roads" simulation */}
+          <line x1="0" y1="50" x2="100" y2="50" stroke="rgba(255,255,255,0.05)" strokeWidth="2" />
+          <line x1="50" y1="0" x2="50" y2="100" stroke="rgba(255,255,255,0.05)" strokeWidth="2" />
 
-          {/* Route line doctor→patient */}
+          {/* Route line doctor→patient (Premium Glow) */}
           {doctorPos && (
-            <line
-              x1={doctorPos.x} y1={doctorPos.y} x2={50} y2={50}
-              stroke="#3b82f6" strokeWidth="0.6" strokeDasharray="2 1.5" opacity="0.6"
-            />
+            <path
+              d={`M ${doctorPos.x} ${doctorPos.y} L 50 50`}
+              stroke="#3b82f6" strokeWidth="0.8" strokeDasharray="3 2" opacity="0.8"
+              fill="none"
+            >
+              <animate attributeName="stroke-dashoffset" from="10" to="0" dur="1s" repeatCount="indefinite" />
+            </path>
           )}
 
           {/* Patient (green) */}
-          <circle cx={50} cy={50} r={2.5} fill="#10d98a" />
+          <circle cx={50} cy={50} r={6} fill="url(#patientGlow)" />
+          <circle cx={50} cy={50} r={2} fill="#10b981" />
           <circle cx={50} cy={50} r={5} fill="none" stroke="#10d98a" strokeWidth="0.4" opacity="0.5">
-            <animate attributeName="r" values="3;8;3" dur="2s" repeatCount="indefinite" />
-            <animate attributeName="opacity" values="0.5;0;0.5" dur="2s" repeatCount="indefinite" />
+            <animate attributeName="r" values="2;8;2" dur="2s" repeatCount="indefinite" />
+            <animate attributeName="opacity" values="0.6;0;0.6" dur="2s" repeatCount="indefinite" />
           </circle>
 
-          {/* Doctor (blue) */}
+          {/* Doctor (blue - Uber-like Car Icon simulation) */}
           {doctorPos && (
-            <>
-              <circle cx={doctorPos.x} cy={doctorPos.y} r={2.5} fill="#3b82f6" />
-              <circle cx={doctorPos.x} cy={doctorPos.y} r={5} fill="none" stroke="#3b82f6" strokeWidth="0.4" opacity="0.4">
-                <animate attributeName="r" values="2.5;6;2.5" dur="1.8s" repeatCount="indefinite" />
-                <animate attributeName="opacity" values="0.4;0;0.4" dur="1.8s" repeatCount="indefinite" />
+            <g transform={`translate(${doctorPos.x - 2.5}, ${doctorPos.y - 2.5})`}>
+              <circle cx={2.5} cy={2.5} r={2.5} fill="#3b82f6" />
+              <circle cx={2.5} cy={2.5} r={5} fill="none" stroke="#3b82f6" strokeWidth="0.4" opacity="0.4">
+                <animate attributeName="r" values="2.5;7;2.5" dur="1.5s" repeatCount="indefinite" />
+                <animate attributeName="opacity" values="0.5;0;0.5" dur="1.5s" repeatCount="indefinite" />
               </circle>
-            </>
+            </g>
           )}
         </svg>
 

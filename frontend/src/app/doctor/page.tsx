@@ -11,14 +11,15 @@ export default function DoctorAuthPage() {
   const [message, setMessage] = React.useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [onShift, setOnShift] = React.useState(true)
   const [loggedIn, setLoggedIn] = React.useState(false)
-  const [doctorInfo, setDoctorInfo] = React.useState({ name: '', hospital: '', specialization: '' })
+  const [doctorInfo, setDoctorInfo] = React.useState({ name: '', hospital: '', specialization: '', verified: false })
 
   React.useEffect(() => {
     const token = localStorage.getItem('doctor_token')
     const name = localStorage.getItem('doctor_name') || ''
     const hospital = localStorage.getItem('doctor_hospital') || ''
     const specialization = localStorage.getItem('doctor_specialization') || ''
-    if (token) { setLoggedIn(true); setDoctorInfo({ name, hospital, specialization }) }
+    const verified = localStorage.getItem('doctor_verified') === 'true'
+    if (token) { setLoggedIn(true); setDoctorInfo({ name, hospital, specialization, verified }) }
   }, [])
 
   // Login form
@@ -28,7 +29,7 @@ export default function DoctorAuthPage() {
   // Register form
   const [reg, setReg] = React.useState({
     name: '', email: '', password: '', hospital: '',
-    specialization: '', license_number: '', phone: ''
+    specialization: '', license_number: '', license_type: 'MBBS', phone: '', license_doc_url: ''
   })
 
   const handleLogin = async () => {
@@ -45,6 +46,7 @@ export default function DoctorAuthPage() {
       localStorage.setItem('doctor_name', data.name)
       localStorage.setItem('doctor_hospital', data.hospital)
       localStorage.setItem('doctor_specialization', data.specialization || 'MBBS, General Physician')
+      localStorage.setItem('doctor_verified', 'true') // If they can log in, they are verified (backend check)
       window.location.href = '/hospital'
     } catch (e: any) {
       setMessage({ type: 'error', text: e.message })
@@ -83,9 +85,14 @@ export default function DoctorAuthPage() {
         {/* Profile Card */}
         <div style={{ background: 'rgba(8,20,45,0.9)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 24, padding: '32px 28px', backdropFilter: 'blur(20px)', textAlign: 'center' }}>
           <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'linear-gradient(135deg,#059669,#10b981)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32, margin: '0 auto 16px', boxShadow: '0 0 30px rgba(16,217,138,0.3)' }}>👨‍⚕️</div>
-          <h2 style={{ fontSize: 22, fontWeight: 900, marginBottom: 4 }}>Dr. {doctorInfo.name}</h2>
-          <p style={{ fontSize: 13, color: '#10d98a', marginBottom: 4 }}>{doctorInfo.specialization}</p>
-          <p style={{ fontSize: 12, color: '#475569', marginBottom: 24 }}>🏥 {doctorInfo.hospital}</p>
+          <h2 style={{ fontSize: 22, fontWeight: 900, marginBottom: 4 }}>Dr. {(doctorInfo as any).name}</h2>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 12 }}>
+            <span style={{ fontSize: 13, color: '#10d98a' }}>{(doctorInfo as any).specialization}</span>
+            <span style={{ background: 'rgba(16,217,138,0.1)', color: '#10d98a', fontSize: 9, fontWeight: 900, padding: '2px 6px', borderRadius: 4, border: '1px solid rgba(16,217,138,0.2)' }}>
+              {(doctorInfo as any).verified ? '✅ VERIFIED' : '⏳ PENDING'}
+            </span>
+          </div>
+          <p style={{ fontSize: 12, color: '#475569', marginBottom: 24 }}>🏥 {(doctorInfo as any).hospital}</p>
           {/* Shift Toggle */}
           <button onClick={() => setOnShift(s => !s)} style={{ width: '100%', padding: '14px', borderRadius: 14, border: 'none', background: onShift ? 'linear-gradient(135deg,#059669,#10b981)' : 'linear-gradient(135deg,#dc2626,#ef4444)', color: 'white', fontSize: 15, fontWeight: 800, cursor: 'pointer', marginBottom: 12, boxShadow: onShift ? '0 4px 20px rgba(5,150,105,0.35)' : '0 4px 20px rgba(239,68,68,0.35)' }}>
             {onShift ? '🟢 On Shift — Click to Go Off Shift' : '🔴 Off Shift — Click to Go On Shift'}
@@ -151,11 +158,23 @@ export default function DoctorAuthPage() {
                 { key: 'hospital', label: '🏥 Hospital Name', type: 'text', placeholder: 'Dist. Govt. Hospital, Mysuru' },
                 { key: 'specialization', label: '⚕️ Specialization', type: 'text', placeholder: 'General Physician' },
                 { key: 'license_number', label: '🪪 Medical License #', type: 'text', placeholder: 'KAR-2019-12345' },
+                { key: 'license_type', label: '🎓 License Type', type: 'select', options: ['MBBS', 'BHMS', 'BAMS', 'BDS', 'DNB'] },
+                { key: 'license_doc_url', label: '📄 License Doc URL (PDF/Image)', type: 'text', placeholder: 'https://storage.com/license.pdf' },
                 { key: 'phone', label: '📞 Phone', type: 'tel', placeholder: '9876543210' },
               ].map(f => (
                 <div key={f.key}>
                   <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.07em', display: 'block', marginBottom: 5 }}>{f.label}</label>
-                  <input type={f.type} value={(reg as any)[f.key]} onChange={e => setReg(r => ({ ...r, [f.key]: e.target.value }))} placeholder={f.placeholder} style={INPUT} />
+                  {f.type === 'select' ? (
+                    <select 
+                      value={(reg as any)[f.key]} 
+                      onChange={e => setReg(r => ({ ...r, [f.key]: e.target.value }))}
+                      style={{ ...INPUT, appearance: 'none', background: 'rgba(8,20,45,0.9) url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'24\' height=\'24\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'white\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3E%3Cpolyline points=\'6 9 12 15 18 9\'%3E%3C/polyline%3E%3C/svg%3E") no-repeat right 12px center', backgroundSize: '16px' }}
+                    >
+                      {(f as any).options.map((opt: string) => <option key={opt} value={opt} style={{ background: '#050e1a' }}>{opt}</option>)}
+                    </select>
+                  ) : (
+                    <input type={f.type} value={(reg as any)[f.key]} onChange={e => setReg(r => ({ ...r, [f.key]: e.target.value }))} placeholder={f.placeholder} style={INPUT} />
+                  )}
                 </div>
               ))}
               <button onClick={handleRegister} disabled={loading} style={{ width: '100%', padding: '15px', borderRadius: 14, background: 'linear-gradient(135deg,#059669,#10b981)', border: 'none', color: 'white', fontSize: 14, fontWeight: 800, cursor: loading ? 'not-allowed' : 'pointer', marginTop: 4, opacity: loading ? 0.7 : 1 }}>
